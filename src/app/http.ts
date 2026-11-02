@@ -96,9 +96,11 @@ function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admis
 }
 function setupView(runtime: HttpHost) {
   const resolved = runtime.configured() ? runtime.deployment : undefined
+  // The agent's account on the code host, GitHub or GitLab, with the repository it works on.
+  const agent = resolved?.github ?? resolved?.gitlab
   return {
     machine: machineView(runtime.machine), problem: runtime.setupProblem ?? null, feishuProblem: runtime.feishuProblem ?? null,
-    accounts: resolved ? { ...resolved.github ? { repository: resolved.repository, agent: resolved.github.login } : {},
+    accounts: resolved ? { ...agent ? { repository: resolved.repository, agent: agent.login } : {},
       feishu: resolved.feishu ? { appId: resolved.feishu.appId, brand: resolved.feishu.brand, botId: resolved.feishu.botId, name: resolved.feishu.name } : null } : null,
   }
 }

@@ -8,7 +8,7 @@ import { githubChannel } from '../src/sources/github-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { key, type OutboundMessage } from '../src/core/index.ts'
-import { testChatDeployment, testDeployment } from './fixtures/deployment.ts'
+import { testChatDeployment, testDeployment, testGitlabDeployment } from './fixtures/deployment.ts'
 const sources = new SourceRegistry(() => SettingsSchema.parse({}))
 sources.register(feishuKind); sources.register(githubKind)
 const send = (commands: Commands, message: OutboundMessage) => sources.send(message, commands)
@@ -169,6 +169,77 @@ describe('GitHub calls', () => {
     expect(tally).toEqual({ skipped: 1 })
     run.mockResolvedValue('{"message":"not a list"}')
     await expect(value.pages(z.looseObject({ id: z.number() }), 'issues/12/comments')).rejects.toThrow()
+  })
+})
+describe('GitLab calls', () => {
+  const gitlab = testGitlabDeployment({ gitlab: { ...testGitlabDeployment().gitlab, cli: '/path/agent-glab' } })
+  const commands = () => new Commands(() => gitlab, {}, new AbortController().signal)
+  const item = z.looseObject({ id: z.number() })
+  /** `count` list items with ids from `first`, as the CLI prints one page of a list. */
+  const page = (count: number, first = 0) => JSON.stringify(Array.from({ length: count }, (_, index) => ({ id: first + index })))
+  it('go only to paths inside the configured project, validate what GitLab answers, and reach account paths without it', async () => {
+    const value = commands()
+    const run = vi.spyOn(value, 'run').mockResolvedValue('{"iid":7,"title":"Fix login","extra":true}')
+    expect(await value.gitlab(z.looseObject({ iid: z.number() }), 'merge_requests/7')).toEqual({ iid: 7, title: 'Fix login', extra: true })
+    expect(run).toHaveBeenLastCalledWith('/path/agent-glab', ['api', 'projects/42/merge_requests/7'])
+    // Flags go after the path, and an empty path targets the project itself.
+    await value.gitlab(z.unknown(), 'merge_requests/7/notes', '--method', 'POST', '-f', 'body=Done')
+    expect(run).toHaveBeenLastCalledWith('/path/agent-glab', ['api', 'projects/42/merge_requests/7/notes', '--method', 'POST', '-f', 'body=Done'])
+    await value.gitlab(z.unknown(), '')
+    expect(run).toHaveBeenLastCalledWith('/path/agent-glab', ['api', 'projects/42'])
+    await expect(value.gitlab(z.looseObject({ iid: z.string() }), 'merge_requests/7')).rejects.toThrow()
+    // Account-level paths such as the agent's to-do list belong to no project.
+    run.mockResolvedValue('[{"id":1}]')
+    expect(await value.gitlabAccount(z.array(item), 'todos?state=pending')).toEqual([{ id: 1 }])
+    expect(run).toHaveBeenLastCalledWith('/path/agent-glab', ['api', 'todos?state=pending'])
+  })
+  it('refuses a GitLab path outside the project', async () => {
+    const value = commands()
+    const run = vi.spyOn(value, 'run').mockResolvedValue('{}')
+    for (const path of ['../x', '../../projects/7/issues', 'issues/../../x', 'issues/..?x=1', '/projects/7', 'https://git.example.com/api/v4/user']) {
+      await expect(value.gitlab(z.unknown(), path)).rejects.toThrow('GitLab calls are restricted to the configured project')
+      await expect(value.gitlabPages(item, path)).rejects.toThrow('GitLab calls are restricted to the configured project')
+      await expect(value.gitlabAccount(z.unknown(), path)).rejects.toThrow('GitLab calls are restricted to the configured project')
+    }
+    expect(run).not.toHaveBeenCalled()
+  })
+  it('pages through a GitLab list until a short page', async () => {
+    const value = commands()
+    const run = vi.spyOn(value, 'run').mockResolvedValueOnce(page(100)).mockResolvedValueOnce(page(100, 100)).mockResolvedValueOnce(page(3, 200))
+    const list = await value.gitlabPages(item, 'merge_requests?state=opened')
+    expect(list).toHaveLength(203)
+    expect(list.map(entry => entry.id)).toEqual(Array.from({ length: 203 }, (_, index) => index))
+    // The page parameters join the query the path already has, or start one.
+    expect(run.mock.calls.map(call => call[1])).toEqual([1, 2, 3].map(number => ['api', `projects/42/merge_requests?state=opened&per_page=100&page=${number}`]))
+    run.mockReset().mockResolvedValueOnce(page(100)).mockResolvedValueOnce('[]')
+    expect(await value.gitlabPages(item, 'issues/3/notes')).toHaveLength(100)
+    expect(run.mock.calls.map(call => call[1])).toEqual([1, 2].map(number => ['api', `projects/42/issues/3/notes?per_page=100&page=${number}`]))
+  })
+  it('skips and counts a list item that does not validate, without ending the list early', async () => {
+    const value = commands()
+    // A page of 100 holding one bad item is still a full page.
+    const bad = JSON.stringify([{ id: 'one' }, ...JSON.parse(page(99, 1)) as unknown[]])
+    const run = vi.spyOn(value, 'run').mockResolvedValueOnce(bad).mockResolvedValueOnce(page(2, 100))
+    const tally = { skipped: 0 }
+    expect(await value.gitlabPages(item, 'issues', tally)).toHaveLength(101)
+    expect(tally).toEqual({ skipped: 1 })
+    // An answer that is no list is an error, not an empty list.
+    run.mockResolvedValueOnce('{"message":"401 Unauthorized"}')
+    await expect(value.gitlabPages(item, 'issues')).rejects.toThrow()
+  })
+  it('refuses GitLab commands when the deployment has no GitLab account', async () => {
+    const refused = 'This installation has no GitLab account'
+    for (const deployment of [testDeployment(), testChatDeployment()]) {
+      const value = new Commands(() => deployment, {}, new AbortController().signal)
+      const run = vi.spyOn(value, 'run')
+      await expect(value.gitlab(z.unknown(), 'issues/1')).rejects.toThrow(refused)
+      await expect(value.gitlabPages(item, 'issues')).rejects.toThrow(refused)
+      await expect(value.gitlabAccount(z.unknown(), 'todos')).rejects.toThrow(refused)
+      expect(run).not.toHaveBeenCalled()
+    }
+    // And a GitLab deployment has no GitHub account for the GitHub calls to act as.
+    const value = commands()
+    await expect(value.api(z.unknown(), 'issues/1')).rejects.toThrow('This installation has no GitHub account')
   })
 })
 it('says how to add the bot to a chat when Feishu answers that it is not a member, and keeps the code', async () => {

@@ -1,12 +1,16 @@
-/** Subprocess wrapper for running gh, lark-cli, and git commands under the deployment's configured accounts. */
+/** Subprocess wrapper for running gh, glab, lark-cli, and git commands under the deployment's configured accounts. */
 import { execFile } from 'node:child_process'
 import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
-import { githubOf, type Deployment } from '../deployment.ts'
+import { githubOf, gitlabOf, type Deployment } from '../deployment.ts'
 
 const exec = promisify(execFile)
 const TIMEOUT_MS = 90_000
+/** GitLab's largest page. */
+const PAGE_SIZE = 100
+/** An API path that leaves the place it is joined to: absolute, a URL, or with a `..` segment. */
+const OUTSIDE = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i
 /**
  * Error thrown by Commands when a CLI invocation fails, capturing stderr diagnostics, API error codes, and exit status without echoing command arguments.
  * Source channels and pollers inspect its code to distinguish deleted conversations from retryable failures.
@@ -53,8 +57,8 @@ function membership(error: unknown): unknown {
   return new CliError(hint, error.code, error.exitCode)
 }
 /**
- * Executes gh, lark-cli, and git subprocesses with deployment account credentials, timeouts, and abort signals.
- * Restricts GitHub API calls to the configured repository and translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
+ * Executes gh, glab, lark-cli, and git subprocesses with deployment account credentials, timeouts, and abort signals.
+ * Restricts GitHub API calls to the configured repository and GitLab API calls to the configured project, and translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
  */
 export class Commands {
   /**
@@ -97,9 +101,38 @@ export class Commands {
     return validItems(item, pages.flat(), tally)
   }
   private path(path: string): string {
-    const outside = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i.test(path)
-    if (outside) throw new Error('GitHub calls are restricted to the configured repository')
+    if (OUTSIDE.test(path)) throw new Error('GitHub calls are restricted to the configured repository')
     return path ? `repos/${this.repository}/${path}` : `repos/${this.repository}`
+  }
+  /**
+   * Calls the GitLab API on a path within the configured project (`projects/<id>/<path>`) through the agent's `glab api`, validating the JSON output.
+   * Only `glab api` is used: the higher-level glab commands panic on old instances.
+   * @throws CliError with GitLab's HTTP status as `code` on failure, or an Error when the deployment has no GitLab account.
+   */
+  async gitlab<T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T> {
+    const { cli, projectId } = gitlabOf(this.deployment)
+    return schema.parse(JSON.parse(await this.run(cli, ['api', this.gitlabPath(path, `projects/${projectId}`), ...flags])))
+  }
+  /**
+   * Fetches all pages of a GitLab API list within the configured project, 100 items at a time until one comes back short, skipping items
+   * that fail schema validation. `path` carries no `per_page` or `page` of its own.
+   */
+  async gitlabPages<T>(item: z.ZodType<T>, path: string, tally?: Tally): Promise<T[]> {
+    const list: unknown[] = []
+    for (let page = 1; ; page++) {
+      const items = await this.gitlab(z.array(z.unknown()), `${path}${path.includes('?') ? '&' : '?'}per_page=${PAGE_SIZE}&page=${page}`)
+      list.push(...items)
+      if (items.length < PAGE_SIZE) return validItems(item, list, tally)
+    }
+  }
+  /** Calls the GitLab API on a path of the agent's account rather than of the project, such as `todos`, validating the JSON output. */
+  async gitlabAccount<T>(schema: z.ZodType<T>, path: string): Promise<T> {
+    return schema.parse(JSON.parse(await this.run(gitlabOf(this.deployment).cli, ['api', this.gitlabPath(path)])))
+  }
+  /** `path` under `base` when there is one, once it is known to stay there. */
+  private gitlabPath(path: string, base?: string): string {
+    if (OUTSIDE.test(path)) throw new Error('GitLab calls are restricted to the configured project')
+    return base === undefined ? path : path ? `${base}/${path}` : base
   }
   /**
    * Runs the Feishu bot's `lark-cli` and returns the JSON `data` payload.

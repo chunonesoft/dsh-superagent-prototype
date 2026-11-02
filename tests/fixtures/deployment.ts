@@ -1,6 +1,6 @@
 /** Default deployment and machine fixtures for tests. */
 import type { Volatile } from '@deepseek-ai/cordis'
-import type { Deployment, GithubAccount, Machine } from '../../src/deployment.ts'
+import type { Deployment, GithubAccount, GitlabAccount, Machine } from '../../src/deployment.ts'
 
 /** Mutable Volatile reference for simulating live configuration updates. */
 export const reference = <T>(value: T): Volatile<T> & { set(next: T): void } => {
@@ -23,3 +23,10 @@ export const testChatDeployment = (overrides: Partial<Deployment> = {}): Deploym
   const { repository: _repository, github: _github, ...chat } = testDeployment()
   return { ...chat, ...overrides }
 }
+/** A deployment run through GitLab: `testChatDeployment` with the agent's account on a self-hosted instance (http, as the oldest one measured), whose project is its repository. */
+export const testGitlabDeployment = (overrides: Partial<Deployment> = {}): Deployment & { repository: string; gitlab: GitlabAccount } => ({
+  ...testChatDeployment(), repository: 'acme/widgets',
+  gitlab: { cli: '/bin/false', login: 'agent.bot', email: 'agent@example.com', project: 'acme/widgets', projectId: 42,
+    webUrl: 'http://git.example.com/acme/widgets', origin: 'http://git.example.com', defaultBranch: 'master' },
+  ...overrides,
+})
