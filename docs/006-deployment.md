@@ -25,7 +25,7 @@ An installation works on at most one code host, GitHub or a self-hosted GitLab, 
 | Source | Receives | Replies with | Needs |
 | --- | --- | --- | --- |
 | GitHub | The agent account's notifications, subscribed Issues and pull requests, and, where switched on, every new Issue, pull request and comment of the repository and the default branch's CI | Comments and review thread replies | A GitHub user with write access to a github.com repository, and `gh` signed in as it |
-| GitLab | The agent account's Todos in the project, subscribed Issues and merge requests, and, where switched on, every new Issue, merge request and note of the project and the default branch's pipeline | Notes on the Issue or merge request | A GitLab user with the Developer role in the project, and `glab` signed in as it |
+| GitLab | The agent account's Todos in the project, which it marks done once it has read their Thread, subscribed Issues and merge requests, and, where switched on, every new Issue, merge request and note of the project and the default branch's pipeline | Notes on the Issue or merge request | A GitLab user of its own with the Developer role in the project, and `glab` signed in as it |
 | Feishu | The messages of the listed chats and direct messages, with history recovery and polling of subscribed topics | Topic replies | A Feishu bot, and `lark-cli` configured as it |
 | DingTalk | The messages that mention the robot in the listed chats, and direct messages | Replies in the chat | A DingTalk robot, and `dingtalk-bot` configured as it |
 

@@ -46,7 +46,7 @@ const mrPayload = { id: 91, iid: 7, project_id: 42, title: 'Fix login', descript
 describe('GitLab Triggers', () => {
   it('translates a note into a Trigger on the Thread of its Issue or merge request', () => {
     const trigger = noteTrigger(note({ body: 'Could @agent.bot take a look?' }), mr, AGENT)!
-    expect(trigger).toEqual({ id: key('gitlab-note', 'mr:7', '5', '2026-11-01T10:00:00.000+08:00'), source: 'gitlab',
+    expect(trigger).toEqual({ id: key('gitlab-note', 'mr:7', '5', 'Could @agent.bot take a look?'), source: 'gitlab',
       threads: [{ source: 'gitlab', id: 'mr:7' }], actor: { source: 'gitlab', id: 'alice' }, human: true, addressed: 'mention',
       at: '2026-11-01T10:00:00.000+08:00', text: 'Could @agent.bot take a look?', url: mr.url,
       channel: { source: 'gitlab', thread: 'gitlab:mr:7', address: { kind: 'mr', iid: '7', url: mr.url } },
@@ -504,15 +504,15 @@ const observe = (h: ReturnType<typeof host>, config: Record<string, unknown> = {
 afterEach(() => { vi.restoreAllMocks() })
 /**
  * `glab api` as a poll reads it: the answer of the route a path names without its query and without `projects/42/`, as JSON, and a 404 for
- * any other. A list is one page long. Returns the paths read, in order. A round reads through a Commands of its own, as it holds a
- * signal, so the stub is on the class.
+ * any other, except that marking a Todo done succeeds unless a route says otherwise. A list is one page long. Returns the paths read, in
+ * order. A round reads through a Commands of its own, as it holds a signal, so the stub is on the class.
  */
 function glab(routes: Record<string, unknown>): string[] {
   const reads: string[] = []
   vi.spyOn(Commands.prototype, 'run').mockImplementation(async (_program, args) => {
     const path = args[1]!.replace(/^projects\/42\/?/, '')
     reads.push(path)
-    const route = routes[path.split('?')[0]!]
+    const route = routes[path.split('?')[0]!] ?? (/^todos\/\d+\/mark_as_done$/.test(path) ? {} : undefined)
     const value: unknown = typeof route === 'function' ? (route as () => unknown)() : route
     if (value instanceof Error) throw value
     if (value === undefined) throw refused(404, 'Not Found')
@@ -610,13 +610,13 @@ describe('GitLab Source', () => {
         noteJson(11, '@agent.bot please look', { updated_at: at(2) }), noteJson(10, 'This looks wrong')] })
     await pollRound(h)
     // Each thread is read once, whatever the number of Todos that name it.
-    expect(reads.filter(path => path.startsWith('todos'))).toEqual(['todos?project_id=42&state=pending&per_page=100&page=1'])
+    expect(reads.filter(path => path.startsWith('todos?'))).toEqual(['todos?project_id=42&state=pending&per_page=100&page=1'])
     expect(reads.filter(path => /^(merge_requests|issues)\/\d+$/.test(path))).toEqual(['merge_requests/7', 'issues/3'])
     expect(reads.filter(path => path.includes('/notes'))).toHaveLength(2)
     expect(h.receive.mock.calls.map(([trigger]) => [trigger.threads[0]!.id, trigger.meta.kind, trigger.meta.noteId ?? null, trigger.addressed ?? null])).toEqual([
       ['mr:7', 'note', 10, null], ['mr:7', 'note', 11, 'mention'], ['issue:3', 'issue', null, 'mention']])
-    // The Todos are not marked done: nothing but reads was asked of GitLab.
-    expect(reads.every(path => !path.includes('mark_as_done'))).toBe(true)
+    // The Todos of each Thread read are marked done, so that GitLab makes a new one at the next mention there; the commit's is left.
+    expect(reads.filter(path => path.endsWith('mark_as_done'))).toEqual(['todos/1/mark_as_done', 'todos/4/mark_as_done', 'todos/3/mark_as_done'])
     // Their cursor moves, and so do the cursors of the threads read.
     expect(Date.parse(h.store.get(KV.gitlab.since)!)).toBeGreaterThan(Date.parse(since))
     expect(h.store.get(KV.gitlab.cursor('mr:7'))).toEqual(expect.any(String))
@@ -626,6 +626,17 @@ describe('GitLab Source', () => {
     h.store.set(KV.gitlab.since, since); h.store.delete(KV.gitlab.cursor('mr:7')); h.store.delete(KV.gitlab.cursor('issue:3'))
     await pollRound(h)
     expect(await Promise.all(h.receive.mock.results.map(result => result.value))).toEqual(['duplicate', 'duplicate', 'duplicate'])
+    h.store.close()
+  })
+
+  it('keeps the cursor while a Todo cannot be marked done', async () => {
+    const h = host()
+    const since = at(-60)
+    h.store.set(KV.gitlab.since, since)
+    glab({ todos: [todo(3, 'Issue', 3)], 'issues/3': issueJson(3), 'issues/3/notes': [], 'todos/3/mark_as_done': refused(500, 'Internal Server Error') })
+    await expect(pollRound(h)).rejects.toThrow('issue:3')
+    // The Thread was read, but its Todo is still pending, so the next round reads it again and marks it then.
+    expect(h.store.get(KV.gitlab.since)).toBe(since)
     h.store.close()
   })
 

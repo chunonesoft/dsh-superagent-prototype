@@ -138,8 +138,8 @@ export class Commands {
     return this.run(cli, ['api', this.gitlabPath(path, `projects/${projectId}`), ...flags])
   }
   /** Calls the GitLab API on a path of the agent's account rather than of the project, such as `todos`, validating the JSON output. */
-  async gitlabAccount<T>(schema: z.ZodType<T>, path: string): Promise<T> {
-    return schema.parse(JSON.parse(await this.run(gitlabOf(this.deployment).cli, ['api', this.gitlabPath(path)])))
+  async gitlabAccount<T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T> {
+    return schema.parse(JSON.parse(await this.run(gitlabOf(this.deployment).cli, ['api', this.gitlabPath(path), ...flags])))
   }
   /** `path` under `base` when there is one, once it is known to stay there. */
   private gitlabPath(path: string, base?: string): string {

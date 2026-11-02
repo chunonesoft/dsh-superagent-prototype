@@ -175,9 +175,9 @@ function failed(ctx: SourceContext, round: Round, thread: string, error: unknown
 }
 
 const PipelineSchema = z.looseObject({ status: z.string(), web_url: z.string().nullish() })
-/** What a Todo of the agent gives that locates a Thread: its project and the Issue or merge request it is on. */
+/** What a Todo of the agent gives that locates a Thread: its ID, its project and the Issue or merge request it is on. */
 const TodoSchema = z.looseObject({
-  project: z.looseObject({ id: z.number() }).nullish(), target_type: z.string(), created_at: z.string(),
+  id: z.number(), project: z.looseObject({ id: z.number() }).nullish(), target_type: z.string(), created_at: z.string(),
   target: z.looseObject({ iid: z.number().optional(), project_id: z.number().nullish() }).nullish(),
 })
 type Todo = z.infer<typeof TodoSchema>
@@ -195,32 +195,39 @@ async function pendingTodos(ctx: SourceContext, round: Round, since: string): Pr
   }
 }
 /**
- * Reads the Issues and merge requests the agent's pending Todos name, oldest Todo first and each Thread once. A Todo only locates its
- * Thread, whose Triggers come from its notes, so nothing depends on the note a Todo links to; Todos are never marked done, which would
- * change the account's state, so their `created_at` is the cursor. The cursor moves once every Thread was read, and stays when the round
- * is cut short or a read fails, so the same Todos are read again, whose Triggers intake takes for duplicates.
+ * Reads the Issues and merge requests the agent's pending Todos name, oldest Todo first and each Thread once, then marks those Todos done:
+ * unless it is set to allow several, GitLab makes no new Todo on an Issue or merge request while one is pending there, so a Todo left
+ * pending would hide every later mention on it. A Todo only locates its Thread, whose Triggers come from its notes, so nothing depends on
+ * the note a Todo links to. Their `created_at` is the cursor, which moves once every Thread was read and its Todos marked done, and stays
+ * when the round is cut short or a read or a mark fails, so the same Todos are read again, whose Triggers intake takes for duplicates.
  * @returns the number of new Todos.
  */
 async function pollTodos(ctx: SourceContext, round: Round): Promise<number> {
   const { state } = ctx
   const { projectId } = gitlabOf(ctx.deployment)
+  const commands = ctx.commands.withSignal(round.signal)
   const stored = state.get(KV.gitlab.since)
   const since = later(stored ?? round.started, new Date(Date.parse(round.started) - POLL_HORIZON_MS).toISOString())
   if (stored === undefined) state.set(KV.gitlab.since, since)
   const todos = await pendingTodos(ctx, round, since)
   // A Todo of another project, or of a commit, names no Thread of this one.
-  const threads = new Map<string, Subject>()
+  const threads = new Map<string, { subject: Subject, todoIds: number[] }>()
   for (const todo of todos.reverse()) {
     const kind = TARGET_KINDS.get(todo.target_type), iid = todo.target?.iid
     if (!kind || iid === undefined || (todo.project?.id ?? todo.target?.project_id) !== projectId) continue
-    threads.set(threadIdOf({ kind, iid }), { kind, iid })
+    const id = threadIdOf({ kind, iid })
+    let thread = threads.get(id)
+    if (!thread) threads.set(id, thread = { subject: { kind, iid }, todoIds: [] })
+    thread.todoIds.push(todo.id)
   }
   let complete = true
-  for (const [id, subject] of threads) {
+  for (const [id, { subject, todoIds }] of threads) {
     if (stopped(ctx, round)) return todos.length
     const cursor = state.get(KV.gitlab.cursor(id))
-    try { await readThread(ctx, round, subject, cursor ? later(cursor, since) : since) }
-    catch (error) {
+    try {
+      await readThread(ctx, round, subject, cursor ? later(cursor, since) : since)
+      for (const todo of todoIds) await commands.gitlabAccount(z.unknown(), `todos/${todo}/mark_as_done`, '--method', 'POST')
+    } catch (error) {
       if (stopped(ctx, round)) return todos.length
       failed(ctx, round, id, error)
       if (!deleted(error)) complete = false

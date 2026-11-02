@@ -67,12 +67,16 @@ export const mentions = (text: string, login: string): boolean =>
   new RegExp(`(?:^|[^a-zA-Z0-9_.@-])@${escapeRegExp(login)}(?![a-zA-Z0-9_-]|\\.[a-zA-Z0-9_-])`, 'i').test(text)
 const author = (user: { username: string }, agent: string) =>
   ({ actor: { source: SOURCE, id: user.username }, human: !sameName(user.username, agent) })
-/** Builds a trigger for a note; returns undefined for a note GitLab wrote itself and for the agent's own, which it must never answer. */
+/**
+ * Builds a trigger for a note; returns undefined for a note GitLab wrote itself and for the agent's own, which it must never answer.
+ * The ID holds the note's text rather than its `updated_at`, which GitLab also moves when a discussion is resolved, so only an edit of
+ * the text makes the note a new Trigger.
+ */
 export function noteTrigger(note: GitlabNote, ref: GitlabRef, agent: string): Trigger | undefined {
   if (note.system || sameName(note.author.username, agent)) return undefined
   const thread = threadIdOf(ref)
   const body = note.body ?? ''
-  return { id: key('gitlab-note', thread, String(note.id), note.updated_at), source: SOURCE, threads: [{ source: SOURCE, id: thread }],
+  return { id: key('gitlab-note', thread, String(note.id), body), source: SOURCE, threads: [{ source: SOURCE, id: thread }],
     ...author(note.author, agent), at: note.updated_at, text: body,
     ...(mentions(body, agent) ? { addressed: 'mention' as const } : {}),
     channel: gitlabChannel(ref, ref.url), ...(ref.url ? { url: ref.url } : {}),
