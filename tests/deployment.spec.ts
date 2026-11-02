@@ -170,10 +170,25 @@ describe('Setup', () => {
     expect(hosted.setup.feishuProblem).toMatchObject({ place: 'feishu', code: 'feishuUserIdentity' })
     expect(hosted.setup.deployment.feishu).toBeUndefined()
   })
-  it('accepts a GitHub Source whose account fields are all cleared, and still names what a half-filled one lacks', async () => {
+  it('accepts clearing GitHub when a working Feishu Source remains, and still names what a half-filled GitHub Source lacks', async () => {
     const { setup } = await start({})
-    // Clearing the fields leaves no GitHub account to check, so the save may go through and setup run again.
+    // The chat Source then runs the installation, and its account checks out, so the save may go through and setup run again.
     await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, feishu: feishu() }))).resolves.toBeUndefined()
     await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: 'acme/widgets' } }))).rejects.toMatchObject({ code: 'agentCliUnset' })
+  })
+  it('refuses to clear GitHub when no other Source is set', async () => {
+    const { setup } = await start({ github: github() })
+    const cleared = { repository: '', cli: '' }
+    // The restart would stop setup with repositoryUnset, as it does for any installation with no Source, so the save is refused before it.
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: cleared }))).rejects.toMatchObject({ place: 'github', code: 'repositoryUnset' })
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: cleared, feishu: { cli: '' } }))).rejects.toMatchObject({ code: 'repositoryUnset' })
+  })
+  it('refuses to clear GitHub when the only remaining Source fails', async () => {
+    program(join(dir, 'bin', 'lark-cli'), lark({ appId: 'cli_bot', identities: { bot: { status: 'ready' } } }, 'off'))
+    // A running installation that leaves Feishu out for its bot, which would then be all there is to run.
+    const { setup } = await start({ github: github(), feishu: feishu() })
+    expect(setup.feishuProblem).toMatchObject({ code: 'feishuUserIdentity' })
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, feishu: feishu() })))
+      .rejects.toMatchObject({ place: 'feishu', code: 'feishuUserIdentity', values: { mode: 'off' } })
   })
 })

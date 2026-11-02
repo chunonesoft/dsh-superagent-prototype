@@ -16,6 +16,14 @@ export interface SetupHost {
 const setupFields = (settings: Settings) =>
   JSON.stringify(Object.entries(SETUP_FIELDS).map(([id, keys]) => keys.map(key => settings.sources[id]?.config[key] ?? '')))
 export const setupChanged = (before: Settings, after: Settings): boolean => setupFields(before) !== setupFields(after)
+/**
+ * Whether setup checks the GitHub account: a GitHub field is set, or no Source is set at all and the check reports `repositoryUnset`.
+ * Otherwise only chat Sources are set, and they run the installation.
+ */
+const checksGithub = (settings: Settings): boolean => {
+  const set = sourcesSet(settings)
+  return set.github || !Object.values(set).some(Boolean)
+}
 
 /**
  * Resolves the target repository and GitHub account when the GitHub Source is set, and the optional Feishu bot, by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
@@ -57,12 +65,16 @@ export class Setup {
   }
   /** Defer the restart to the next macrotask so the current HTTP or tool caller receives its response first. */
   restart(): void { setTimeout(this.host.restart, 0) }
-  /** Verify account CLIs for a modified source block before saving, ignoring setup errors belonging to other blocks. */
+  /**
+   * Verify account CLIs for a modified source block before saving, ignoring setup errors belonging to other blocks.
+   * Clearing the GitHub Source leaves the chat Sources to run the installation, so one that fails there refuses the save.
+   */
   async checkAccounts(block: SettingsBlock, settings: Settings): Promise<void> {
     const { machine } = this.host
-    // A Source with all its account fields cleared names no account to check; setup runs again on the restart the save causes.
-    const check = block === 'source:feishu' ? resolveFeishuBot(machine, settings.sources.feishu?.config, this.probe())
-      : sourcesSet(settings).github ? resolveDeployment(machine, settings.sources.github?.config, this.probe()) : Promise.resolve()
+    const probe = this.probe()
+    const feishu = () => resolveFeishuBot(machine, settings.sources.feishu?.config, probe)
+    if (block === 'source:github' && !checksGithub(settings)) { await feishu(); return }
+    const check = block === 'source:feishu' ? feishu() : resolveDeployment(machine, settings.sources.github?.config, probe)
     await check.catch((error: unknown) => { if (!(error instanceof SetupError) || error.place === block.slice(7)) throw error })
   }
   async blockCommands(blocked: readonly string[]): Promise<void> {
@@ -77,10 +89,7 @@ export class Setup {
   private async resolve(settings: Settings): Promise<Deployment> {
     const { context, machine, lifetime } = this.host
     const probe = this.probe()
-    // A GitHub field set, or no Source set at all, goes through the GitHub check, which names what is missing; otherwise no code host runs.
-    const set = sourcesSet(settings)
-    const deployment: Deployment = set.github || !Object.values(set).some(Boolean)
-      ? await resolveDeployment(machine, settings.sources.github?.config, probe) : machine
+    const deployment: Deployment = checksGithub(settings) ? await resolveDeployment(machine, settings.sources.github?.config, probe) : machine
     const feishu = await resolveFeishuBot(machine, settings.sources.feishu?.config, probe).catch((error: unknown) => {
       if (!(error instanceof SetupError)) throw error
       // Without a code host the chat Source is all there is to run, so its failure stops setup.
