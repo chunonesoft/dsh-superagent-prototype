@@ -20,6 +20,8 @@ export const workerBin = (stateDir: string): string => join(stateDir, 'worker-bi
 export const workerGitConfig = (stateDir: string): string => join(stateDir, 'worker-gitconfig')
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
 const gitQuote = (value: string): string => `"${value.replace(/[\\"]/g, char => `\\${char}`)}"`
+/** The SSH address forms of github.com: with the usual user, as a URL, and with the user left to the SSH configuration. */
+const GITHUB_SSH: readonly string[] = ['git@github.com:', 'ssh://git@github.com/', 'ssh://github.com/', 'github.com:']
 export const credentialHelper = (cli: string): string => `!${shellQuote(cli)} auth git-credential`
 
 export function sameDirectory(a: string, b: string): boolean {
@@ -79,12 +81,15 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
  * stays scheme and host, because git matches a key with a path only against requests that carry that path, and misses a request that
  * names the host alone. The host comes from the instance, so it is written quoted.
  */
-function gitlabSections({ origin, cli, webUrl, project }: GitlabAccount): string[] {
+function gitlabSections({ origin, cli, webUrl, project, sshRoot }: GitlabAccount): string[] {
   const { hostname } = new URL(origin)
   const { pathname } = new URL(webUrl)
   const root = `${origin}${pathname.endsWith(`/${project}`) ? pathname.slice(0, -project.length) : '/'}`
+  // The SSH address GitLab names for the project also covers another user or port, such as `ssh://git@host:2222/`, which the two
+  // common forms miss.
+  const ssh = [...new Set([`git@${hostname}:`, `ssh://git@${hostname}/`, ...sshRoot ? [sshRoot] : []])]
   return [`[credential ${gitQuote(origin)}]`, `\thelper = ${gitQuote(credentialHelper(cli))}`,
-    `[url ${gitQuote(root)}]`, `\tinsteadOf = ${gitQuote(`git@${hostname}:`)}`, `\tinsteadOf = ${gitQuote(`ssh://git@${hostname}/`)}`]
+    `[url ${gitQuote(root)}]`, ...ssh.map(form => `\tinsteadOf = ${gitQuote(form)}`)]
 }
 
 /**
@@ -130,10 +135,14 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
     ...github ? ['[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
-      '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/'] : [],
+      '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/']
+      // With no GitHub account, github.com's SSH addresses still become https ones, for fetches and pushes and for an explicit `pushurl`
+      // too, which `pushInsteadOf` does not touch: git never reaches GitHub with the operator's SSH keys.
+      : ['[url "https://github.com/"]', ...GITHUB_SSH.map(form => `\tinsteadOf = ${form}`)],
     ...gitlab ? gitlabSections(gitlab) : [],
-    // With no GitHub account the common github.com address forms are sent to `github.invalid` when pushed; the TLD never resolves.
-    ...github ? [] : ['[url "https://github.invalid/"]', '\tpushInsteadOf = https://github.com/', '\tpushInsteadOf = git@github.com:', '\tpushInsteadOf = ssh://git@github.com/'],
+    // With no GitHub account the common github.com address forms are sent to `github.invalid` when pushed; the TLD never resolves. An
+    // explicit `pushurl` escapes that, but reaches github.com over https with no credentials: there is no helper and no prompt, so it fails.
+    ...github ? [] : ['[url "https://github.invalid/"]', '\tpushInsteadOf = https://github.com/', ...GITHUB_SSH.map(form => `\tpushInsteadOf = ${form}`)],
     // Include Git LFS filters because the operator's global gitconfig (which usually holds them) is ignored.
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
   ].join('\n') + '\n')

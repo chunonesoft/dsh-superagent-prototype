@@ -215,6 +215,19 @@ describe('agent git configuration for GitLab', () => {
     expect((await fill('url=http://git.example.com/gitlab/acme/widgets.git')).stdout).toContain('password=from-the-agent-cli')
     expect((await fill('protocol=http\nhost=git.example.com')).stdout).toContain('password=from-the-agent-cli')
   })
+  it('rewrites the SSH address GitLab names for the project, with another user or port', async () => {
+    for (const sshRoot of ['ssh://git@git.example.com:2222/', 'gitlab@git.example.com:']) {
+      await writeEnvironment(gitlab(undefined, { sshRoot }), [])
+      const address = await addressesOf()
+      for (const remote of [`${sshRoot}acme/widgets.git`, 'git@git.example.com:acme/widgets.git']) {
+        expect(await address(remote)).toBe('http://git.example.com/acme/widgets.git')
+        expect(await address(remote, '--push')).toBe('http://git.example.com/acme/widgets.git')
+      }
+    }
+    // The usual form is not written twice.
+    await writeEnvironment(gitlab(undefined, { sshRoot: 'git@git.example.com:' }), [])
+    expect(readFileSync(workerGitConfig(dir), 'utf8').match(/git@git\.example\.com:/g)).toHaveLength(1)
+  })
   it('takes the origin as the root when web_url does not end with the project', async () => {
     await writeEnvironment(gitlab(undefined, { webUrl: 'http://git.example.com/acme/other' }), [])
     expect(await (await addressesOf())('git@git.example.com:acme/widgets.git')).toBe('http://git.example.com/acme/widgets.git')
@@ -230,10 +243,11 @@ describe('agent git configuration without a code host', () => {
     const home = join(dir, 'home'); mkdirSync(home)
     writeFileSync(join(home, '.gitconfig'), '[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n[credential]\n\thelper = osxkeychain\n')
     await writeEnvironment(testChatDeployment({ stateDir: dir }), [])
-    // With no GitHub account the file holds no GitHub credential helper and rewrites no address to HTTPS.
+    // With no GitHub account the file holds no GitHub credential helper, and rewrites only github.com's SSH addresses, to HTTPS.
     const config = readFileSync(workerGitConfig(dir), 'utf8')
     expect(config).not.toContain('credential "https://github.com"')
-    expect(config).not.toContain('\tinsteadOf')
+    expect(config.match(/\tinsteadOf = .*/g)).toEqual(['\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/',
+      '\tinsteadOf = ssh://github.com/', '\tinsteadOf = github.com:'])
     const env = workerEnv({ PATH: process.env.PATH, HOME: home, ...agentVariables(dir) })
     const git = async (...args: string[]): Promise<string> => (await exec('git', args, { cwd: dir, env })).stdout.trim()
     await git('init', '-q', 'repo')
@@ -247,11 +261,16 @@ describe('agent git configuration without a code host', () => {
     await git('init', '-q', 'repo')
     for (const deployment of [testChatDeployment({ stateDir: dir }), testGitlabDeployment({ stateDir: dir })]) {
       await writeEnvironment(deployment, [])
-      for (const remote of ['https://github.com/acme/widgets.git', 'git@github.com:acme/widgets.git', 'ssh://git@github.com/acme/widgets.git']) {
+      for (const remote of ['https://github.com/acme/widgets.git', 'git@github.com:acme/widgets.git', 'ssh://git@github.com/acme/widgets.git',
+        'ssh://github.com/acme/widgets.git', 'github.com:acme/widgets.git']) {
         await git('-C', 'repo', 'remote', 'add', 'origin', remote)
-        // Fetching is as it was; a push goes to an address that never resolves.
-        expect(await git('-C', 'repo', 'remote', 'get-url', 'origin')).toBe(remote)
+        // A fetch goes over https, never with the operator's SSH keys; a push goes to an address that never resolves.
+        expect(await git('-C', 'repo', 'remote', 'get-url', 'origin')).toBe('https://github.com/acme/widgets.git')
         expect(await git('-C', 'repo', 'remote', 'get-url', '--push', 'origin')).toBe('https://github.invalid/acme/widgets.git')
+        // An explicit pushurl escapes pushInsteadOf, but not the rewrite of SSH to https, where git has no credentials and may not ask.
+        await git('-C', 'repo', 'config', 'remote.origin.pushurl', 'git@github.com:acme/widgets.git')
+        expect(await git('-C', 'repo', 'remote', 'get-url', '--push', 'origin')).toBe('https://github.com/acme/widgets.git')
+        expect(await git('config', '--get-all', 'credential.helper')).toBe('')
         await git('-C', 'repo', 'remote', 'remove', 'origin')
       }
     }

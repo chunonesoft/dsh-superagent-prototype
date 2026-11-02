@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { Setup } from '../src/app/setup.ts'
-import { Config, executable, machineOf, resolveDeployment, resolveDingtalkBot, resolveFeishuBot, resolveGitlab, sourcesSet, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, executable, machineOf, resolveDeployment, resolveDingtalkBot, resolveFeishuBot, resolveGitlab, sourcesSet, sshRootOf, type Machine, type Probe } from '../src/deployment.ts'
 import { workerGitConfig } from '../src/infra/environment.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { gitEnv, subprocess } from './fixtures/git.ts'
@@ -110,6 +110,18 @@ describe('setup', () => {
     // The origin is scheme, host and port of web_url, nothing of its path; a project with no commit yet has no default branch.
     glab(join(dir, 'bin', 'glab'), gitlabUser, { ...gitlabProject(), web_url: 'https://git.example.com:8443/acme/widgets', default_branch: null })
     expect(await resolve()).toMatchObject({ origin: 'https://git.example.com:8443', webUrl: 'https://git.example.com:8443/acme/widgets', defaultBranch: '' })
+    // The SSH address GitLab names gives the SSH root, another port or user included.
+    glab(join(dir, 'bin', 'glab'), gitlabUser, { ...gitlabProject(), ssh_url_to_repo: 'ssh://git@git.example.com:2222/acme/widgets.git' })
+    expect((await resolve()).sshRoot).toBe('ssh://git@git.example.com:2222/')
+  })
+  it('takes an SSH root only from an address that ends in the project and is safe to write', () => {
+    expect(sshRootOf('git@git.example.com:acme/widgets.git', 'acme/widgets')).toBe('git@git.example.com:')
+    expect(sshRootOf('ssh://git@git.example.com:2222/acme/widgets.git', 'acme/widgets')).toBe('ssh://git@git.example.com:2222/')
+    expect(sshRootOf('gitlab@git.example.com:acme/widgets', 'acme/widgets')).toBe('gitlab@git.example.com:')
+    for (const address of [undefined, null, '', 'git@git.example.com:acme/other.git', 'http://git.example.com/acme/widgets.git',
+      'ssh://git@git.example.com:2222/sub/acme/widgets.git', 'git@git"x.example.com:acme/widgets.git', 'git@git.example.com:\nacme/widgets.git']) {
+      expect(sshRootOf(address, 'acme/widgets'), String(address)).toBeUndefined()
+    }
   })
   it('takes the commit email the instance reports, and the account email when it reports none', async () => {
     const emailOf = async (user: object) => {

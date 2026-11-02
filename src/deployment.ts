@@ -61,7 +61,14 @@ export interface GithubAccount { cli: string; login: string; noreply: string }
  * which differs from the configured path after a move. `origin` (scheme, host and port) comes from the project's `web_url` and is where
  * git credentials are keyed. `email` is the commit email the instance reports, or else the account's email.
  */
-export interface GitlabAccount { cli: string; login: string; email: string; project: string; projectId: number; webUrl: string; origin: string; defaultBranch: string }
+export interface GitlabAccount {
+  cli: string; login: string; email: string; project: string; projectId: number; webUrl: string; origin: string; defaultBranch: string
+  /**
+   * The SSH address of the instance without the project, as GitLab names it in `ssh_url_to_repo`: `git@host:` usually, or a form with
+   * another user or port such as `ssh://git@host:2222/`. Absent when GitLab names none or names one that does not end in the project.
+   */
+  sshRoot?: string
+}
 /**
  * What setup resolved: the machine settings and the accounts of the Sources that are set. `github` or `gitlab` is the agent's account on
  * the code host and comes with its `repository` (for GitLab the project's `path_with_namespace`); one installation has at most one code
@@ -153,10 +160,22 @@ const GitlabUser = z.object({ username: z.string().regex(/^[A-Za-z0-9_.-]+$/), e
 const GitlabAccess = z.object({ access_level: z.number() }).nullish()
 const GitlabProject = z.object({
   id: z.number().int().positive(), path_with_namespace: z.string().regex(/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/), web_url: z.string(),
+  ssh_url_to_repo: z.string().nullish(),
   default_branch: z.string().nullish(), permissions: z.object({ project_access: GitlabAccess, group_access: GitlabAccess }).optional(),
 })
 /** The lowest GitLab access level that pushes branches: Developer. */
 const GITLAB_PUSH_LEVEL = 30
+/**
+ * The part of a project's SSH address before the project, such as `git@host:` or `ssh://git@host:2222/`; undefined unless the address
+ * ends in the project, holds no whitespace, quote or control character, and is an `ssh://` address or a `user@host:` one.
+ */
+export function sshRootOf(address: string | null | undefined, project: string): string | undefined {
+  const suffix = [`${project}.git`, project].find(end => address?.endsWith(end))
+  if (!address || !suffix) return undefined
+  const root = address.slice(0, -suffix.length)
+  if (/[\s"'\\\x00-\x1f\x7f]/.test(root)) return undefined
+  return /^ssh:\/\/[^/]+\/$/.test(root) || /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:$/.test(root) ? root : undefined
+}
 /** The origin of an http or https address, or undefined for anything else. */
 function originOf(address: string): string | undefined {
   try {
@@ -190,7 +209,9 @@ export async function resolveGitlab(machine: Machine, gitlab: unknown, probe: Pr
   // Use the canonical path GitLab returns, as for GitHub's full_name, so a project that moved still matches incoming events.
   const projectPath = project.path_with_namespace
   if (access < GITLAB_PUSH_LEVEL) throw new SetupError('gitlabReadOnly', { account: login, project: projectPath })
-  return { cli, login, email, project: projectPath, projectId: project.id, webUrl: project.web_url, origin, defaultBranch: project.default_branch ?? '' }
+  const sshRoot = sshRootOf(project.ssh_url_to_repo, projectPath)
+  return { cli, login, email, project: projectPath, projectId: project.id, webUrl: project.web_url, origin, defaultBranch: project.default_branch ?? '',
+    ...sshRoot ? { sshRoot } : {} }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })
