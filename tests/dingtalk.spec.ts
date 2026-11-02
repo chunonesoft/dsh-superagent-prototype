@@ -212,8 +212,8 @@ describe('DingTalk Channel', () => {
   })
 
   it('answers gone when the bot left the chat and throws otherwise', async () => {
-    // The robot API's answers, as the CLI reports them. These shapes are provisional: live acceptance measures what DingTalk says after the robot
-    // is removed from a group and when a group is dissolved, and adjusts the one predicate in dingtalk-channel.ts that reads them.
+    // The robot API's answers, as the CLI reports them. These shapes are the wordings expected for a robot removed from a group and for a group
+    // dissolved, which have not been measured; the one predicate in dingtalk-channel.ts that reads them is where to adjust them.
     const gone = [refused(403, 'Forbidden.AccessDenied: the robot is not in the conversation'), refused(400, 'invalidParameter: openConversationId does not exist'),
       refused(404, 'resourceNotFound: the group has been dissolved'), refused(403, 'robot.notInGroup: send failed')]
     for (const error of gone) expect(await sendDingtalk(bot(error).host, reply({ expires: '0' })), error.message).toBe('gone')
@@ -235,6 +235,21 @@ describe('DingTalk Channel', () => {
     const aborted = bot(stopped, { key: 'never' })
     await expect(sendDingtalk(aborted.host, reply())).rejects.toBe(stopped)
     expect(aborted.dingtalk).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers gone for an invalid conversation ID, as the robot API worded it when measured', async () => {
+    // A send to an openConversationId that names no conversation: HTTP 400, DingTalk's code, then its message. No retry makes it exist.
+    const invalid = refused(400, 'invalid.openConversationId: 无效的openConversationId')
+    const api = bot(invalid)
+    expect(await sendDingtalk(api.host, reply({ expires: '0' }))).toBe('gone')
+    expect(api.dingtalk).toHaveBeenCalledTimes(1)
+    // A live webhook is tried first; its answer decides nothing, and the robot API is asked next, which words it the same way.
+    const viaWebhook = bot(refused(310000, 'DingTalk refused the webhook message: session expired'), invalid)
+    expect(await sendDingtalk(viaWebhook.host, reply())).toBe('gone')
+    expect(viaWebhook.dingtalk).toHaveBeenCalledTimes(2)
+    // The same words without an HTTP status, as a CLI that never got an answer reports them, are no reason to drop the reply.
+    const noStatus = commandError({ stderr: JSON.stringify({ error: { message: 'invalid.openConversationId: 无效的openConversationId' } }), code: 1 }, 'dingtalk-bot')
+    await expect(sendDingtalk(bot(noStatus).host, reply({ expires: '0' }))).rejects.toThrow('invalid.openConversationId')
   })
 
   it('applies the chat word limit to a reply before it sends', async () => {

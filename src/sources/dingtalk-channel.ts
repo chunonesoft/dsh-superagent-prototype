@@ -7,18 +7,24 @@ import type { SourceContext } from './host.ts'
 import type { ChannelLink } from './kind.ts'
 
 /**
- * What the robot API says when the robot is not in the conversation, or the conversation no longer exists, in the words the CLI reports
- * (DingTalk's error code and message). These are the wordings expected; live acceptance measures what DingTalk answers after the robot
- * is removed from a group and after a group is dissolved, and adjusts this expression, the one place that reads them.
+ * What the robot API says when a send can never reach its conversation, in the words the CLI reports (DingTalk's error code and
+ * message). One wording was measured: a send to an `openConversationId` that names no conversation answers HTTP 400 with
+ * `invalid.openConversationId: 无效的openConversationId`. The other two are expected and not measured: the robot removed from a group,
+ * and a group dissolved. If DingTalk words either differently, the send is retried like any failure until this expression, the one
+ * place that reads the words, is adjusted.
  */
 const LEFT = new RegExp([
+  // Measured.
+  'invalid\\.openConversationId',
+  // Expected: the robot removed from a group, and a group dissolved.
   'not (in|a member of) (the |this )?(conversation|group|chat)',
   '(conversation|group|chat)(id)? (does not exist|doesn\'t exist|not found|(is|was|has been) dissolved|no longer exists)',
   'notIn(conversation|group|chat)', '(conversation|group|chat)Not(exist|found)'].join('|'), 'i')
 /**
- * True when the robot API refuses a send because the robot left the conversation or the conversation is gone, which no retry fixes.
- * Anything else may pass, so it is no reason to drop the reply: a network error, a throttle, a token that expired, or a refusal about
- * something else all carry no such words, and a failure with no HTTP status (the CLI never got an answer) is never one.
+ * True when the robot API refuses a send because the conversation ID is invalid, the robot left the conversation or the conversation is
+ * gone, which no retry fixes. Anything else may pass, so it is no reason to drop the reply: a network error, a throttle, a token that
+ * expired, or a refusal about something else all carry no such words, and a failure with no HTTP status (the CLI never got an answer) is
+ * never one.
  */
 const gone = (error: unknown): boolean =>
   error instanceof CliError && error.code !== undefined && [400, 403, 404].includes(error.code) && LEFT.test(error.message)
