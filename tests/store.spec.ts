@@ -200,6 +200,17 @@ it('keeps the settings as versions: the current settings are the snapshot of the
   store.close()
 })
 
+it('loads settings stored before the GitLab Source existed, whose blocked commands name glab', () => {
+  const store = new Store(join(directory, 'orchestrator.sqlite'))
+  // Stored as an earlier build did, where glab was an ordinary command name; nothing parses it on its way in.
+  const { executor, ...others } = SettingsSchema.parse({})
+  const settings = { ...others, executor: { ...executor, blockedCommands: ['glab', 'personal-gh'] } }
+  store.set(KV.settings.version(1), { revision: 1, savedAt: '2026-10-01T00:00:00.000Z', source: 'panel', policyVersion: 'v', policyChanged: false, notified: [], settings })
+  store.set(KV.settings.revision, 1)
+  expect(store.settings().executor.blockedCommands).toEqual(['glab', 'personal-gh'])
+  store.close()
+})
+
 it('replaces a working-set column an earlier build defined otherwise, and drops one this version no longer has', () => {
   const path = join(directory, 'orchestrator.sqlite')
   const db = new DatabaseSync(path)

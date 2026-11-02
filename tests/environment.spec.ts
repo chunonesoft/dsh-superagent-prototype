@@ -8,6 +8,7 @@ import { SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'
 import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, verifyEnvironment, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
+import type { GitlabAccount } from '../src/deployment.ts'
 import { testChatDeployment, testDeployment, testGitlabDeployment } from './fixtures/deployment.ts'
 import { gitEnv, subprocess } from './fixtures/git.ts'
 
@@ -63,6 +64,17 @@ describe('worker shims', () => {
       await writeEnvironment(deployment, [])
       await expect(exec(join(bin, 'glab'), ['api', 'user'])).rejects.toMatchObject({ code: 1, stderr: 'glab is unavailable: this installation has no GitLab account.\n' })
     }
+  })
+  it('ignores glab among the blocked commands: its shim runs the GitLab CLI, or fails without a GitLab account', async () => {
+    const agent = program(join(dir, 'glab-agent'), 'echo glab "$@"')
+    const bin = workerBin(dir)
+    await writeEnvironment(testGitlabDeployment({ stateDir: dir, gitlab: { ...testGitlabDeployment().gitlab, cli: agent } }), ['glab'])
+    expect((await exec(join(bin, 'glab'), ['api', 'user'])).stdout).toBe('glab api user\n')
+    for (const deployment of [testDeployment({ stateDir: dir }), testChatDeployment({ stateDir: dir })]) {
+      await writeEnvironment(deployment, ['glab'])
+      await expect(exec(join(bin, 'glab'), ['api', 'user'])).rejects.toMatchObject({ code: 1, stderr: 'glab is unavailable: this installation has no GitLab account.\n' })
+    }
+    expect(readdirSync(bin).sort()).toEqual(['gh', 'glab', 'lark-cli'])
   })
   it('keep `gh` and `lark-cli` working, and shim no `git`, when the blocked commands name the commands workers need', async () => {
     const gh = program(join(dir, 'gh-agent'), 'echo gh "$@"'), lark = program(join(dir, 'lark-bot'), 'echo lark "$@"')
@@ -132,7 +144,26 @@ describe('agent git configuration', () => {
 })
 
 describe('agent git configuration for GitLab', () => {
-  const gitlab = (cli = '/opt/agent tools/glab') => testGitlabDeployment({ stateDir: dir, gitlab: { ...testGitlabDeployment().gitlab, cli } })
+  const gitlab = (cli = '/opt/agent tools/glab', account: Partial<GitlabAccount> = {}) =>
+    testGitlabDeployment({ stateDir: dir, gitlab: { ...testGitlabDeployment().gitlab, cli, ...account } })
+  /** The address git uses for a remote, which is the one it fetches from, or with `--push` the one it pushes to. */
+  const addressesOf = async () => {
+    const { git } = workerGit()
+    await git('init', '-q', 'repo')
+    return async (remote: string, ...flags: string[]): Promise<string> => {
+      await git('-C', 'repo', 'remote', 'add', 'origin', remote)
+      try { return await git('-C', 'repo', 'remote', 'get-url', ...flags, 'origin') } finally { await git('-C', 'repo', 'remote', 'remove', 'origin') }
+    }
+  }
+  /** An agent CLI that gives an account to a git credential request. */
+  const credentialAgent = (): string =>
+    program(join(dir, 'real', 'glab'), 'if [ "$1 $2 $3" = "auth git-credential get" ]; then cat > /dev/null; echo username=agent.bot; echo password=from-the-agent-cli; fi')
+  /** What `git credential fill` answers to the request `input`. */
+  const fill = (input: string) => {
+    const run = exec('git', ['credential', 'fill'], { cwd: dir, env: workerGit().env, timeout: 10_000 })
+    run.child.stdin?.end(`${input}\n\n`)
+    return run
+  }
   it('writes the credential helper for an http origin', async () => {
     await writeEnvironment(gitlab(), [])
     const config = readFileSync(workerGitConfig(dir), 'utf8')
@@ -145,32 +176,46 @@ describe('agent git configuration for GitLab', () => {
     expect(await git('config', '--get-all', 'credential.helper')).toBe('')
   })
   it('hands the agent CLI the credential requests of the instance and no others', async () => {
-    const agent = program(join(dir, 'real', 'glab'), 'if [ "$1 $2 $3" = "auth git-credential get" ]; then cat > /dev/null; echo username=agent.bot; echo password=from-the-agent-cli; fi')
-    await writeEnvironment(gitlab(agent), [])
-    const { env } = workerGit()
-    const fill = (host: string) => {
-      const run = exec('git', ['credential', 'fill'], { cwd: dir, env, timeout: 10_000 })
-      run.child.stdin?.end(`protocol=http\nhost=${host}\n\n`)
-      return run
-    }
-    expect((await fill('git.example.com')).stdout).toContain('password=from-the-agent-cli')
+    await writeEnvironment(gitlab(credentialAgent()), [])
+    expect((await fill('protocol=http\nhost=git.example.com')).stdout).toContain('password=from-the-agent-cli')
     // Another host is not the instance's origin: no helper answers, and git does not ask.
-    await expect(fill('other.example.com')).rejects.toMatchObject({ stderr: expect.stringContaining('terminal prompts disabled') })
+    await expect(fill('protocol=http\nhost=other.example.com')).rejects.toMatchObject({ stderr: expect.stringContaining('terminal prompts disabled') })
   })
   it('rewrites the SSH addresses of the instance to its origin, so a clone uses the agent\'s account and not the operator\'s keys', async () => {
     await writeEnvironment(gitlab(), [])
-    const { git } = workerGit()
-    await git('init', '-q', 'repo')
-    const address = async (remote: string, ...flags: string[]): Promise<string> => {
-      await git('-C', 'repo', 'remote', 'add', 'origin', remote)
-      try { return await git('-C', 'repo', 'remote', 'get-url', ...flags, 'origin') } finally { await git('-C', 'repo', 'remote', 'remove', 'origin') }
-    }
+    // The addresses are written quoted: bare, a `;` or `#` in a value starts a comment.
+    expect(readFileSync(workerGitConfig(dir), 'utf8')).toContain('[url "http://git.example.com/"]\n\tinsteadOf = "git@git.example.com:"\n\tinsteadOf = "ssh://git@git.example.com/"\n')
+    const address = await addressesOf()
     for (const remote of ['git@git.example.com:acme/widgets.git', 'ssh://git@git.example.com/acme/widgets.git']) {
       expect(await address(remote)).toBe('http://git.example.com/acme/widgets.git')
       expect(await address(remote, '--push')).toBe('http://git.example.com/acme/widgets.git')
     }
     // An address of another host is left as it is.
     expect(await address('git@other.example.com:acme/widgets.git')).toBe('git@other.example.com:acme/widgets.git')
+  })
+  it('does not let a character of the instance\'s host that git reads as a comment cut the rewrite short', async () => {
+    // URL parsing admits `;` in a host, and the host comes from the instance's answer.
+    const origin = 'http://git;x.example.com'
+    await writeEnvironment(gitlab(undefined, { origin, webUrl: `${origin}/acme/widgets` }), [])
+    const address = await addressesOf()
+    expect(await address('git@git;x.example.com:acme/widgets.git')).toBe('http://git;x.example.com/acme/widgets.git')
+    // Cut at the `;`, the prefix `git@git` would rewrite the address of any host that starts so.
+    expect(await address('git@git.other.example:acme/widgets.git')).toBe('git@git.other.example:acme/widgets.git')
+  })
+  it('rewrites to the instance root when GitLab is served under a relative URL root, and keeps the credential key to scheme and host', async () => {
+    await writeEnvironment(gitlab(credentialAgent(), { webUrl: 'http://git.example.com/gitlab/acme/widgets' }), [])
+    const address = await addressesOf()
+    for (const remote of ['git@git.example.com:acme/widgets.git', 'ssh://git@git.example.com/acme/widgets.git']) {
+      expect(await address(remote)).toBe('http://git.example.com/gitlab/acme/widgets.git')
+      expect(await address(remote, '--push')).toBe('http://git.example.com/gitlab/acme/widgets.git')
+    }
+    // A credential key with a path would match no request, so it stays the origin, and git still asks the agent CLI for that address.
+    expect(readFileSync(workerGitConfig(dir), 'utf8')).toContain('[credential "http://git.example.com"]')
+    expect((await fill('url=http://git.example.com/gitlab/acme/widgets.git')).stdout).toContain('password=from-the-agent-cli')
+  })
+  it('takes the origin as the root when web_url does not end with the project', async () => {
+    await writeEnvironment(gitlab(undefined, { webUrl: 'http://git.example.com/acme/other' }), [])
+    expect(await (await addressesOf())('git@git.example.com:acme/widgets.git')).toBe('http://git.example.com/acme/widgets.git')
   })
   it('clears the ambient credentials of the GitHub and GitLab CLIs, which they would prefer to their own configuration', () => {
     const cleared = Object.entries(agentVariables(dir)).filter(([, value]) => value === undefined).map(([name]) => name)

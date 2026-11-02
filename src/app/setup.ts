@@ -1,7 +1,7 @@
 /** Probes repository and account CLIs, configures the worker execution environment and command shims, and tracks setup readiness. */
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError } from '../core/index.ts'
-import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, resolveGitlab, sourcesSet, workerProbe, type Deployment, type Machine } from '../deployment.ts'
+import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, resolveGitlab, sourcesSet, workerProbe, type Deployment, type Machine, type SourcesSet } from '../deployment.ts'
 import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
@@ -16,14 +16,13 @@ export interface SetupHost {
 const setupFields = (settings: Settings) =>
   JSON.stringify(Object.entries(SETUP_FIELDS).map(([id, keys]) => keys.map(key => settings.sources[id]?.config[key] ?? '')))
 export const setupChanged = (before: Settings, after: Settings): boolean => setupFields(before) !== setupFields(after)
+/** Whether no Source holds a value in its setup fields. */
+const nothingSet = (set: SourcesSet): boolean => !Object.values(set).some(Boolean)
 /**
  * Whether setup checks the GitHub account: a GitHub field is set, or no Source is set at all and the check reports `repositoryUnset`.
  * Otherwise a GitLab field is set, or only chat Sources are, and those run the installation. Both code hosts set is refused before this is asked.
  */
-const checksGithub = (settings: Settings): boolean => {
-  const set = sourcesSet(settings)
-  return set.github || !Object.values(set).some(Boolean)
-}
+const checksGithub = (set: SourcesSet): boolean => set.github || nothingSet(set)
 
 /**
  * Resolves the target repository and the agent's account on the code host, GitHub or GitLab, when its Source is set, and the optional Feishu bot, by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
@@ -75,7 +74,7 @@ export class Setup {
   async checkAccounts(block: SettingsBlock, settings: Settings): Promise<void> {
     const set = sourcesSet(settings)
     if (set.github && set.gitlab) throw new SetupError('codeHostsBoth')
-    if (!Object.values(set).some(Boolean)) throw new SetupError(block === 'source:github' ? 'repositoryUnset' : 'lastSource')
+    if (nothingSet(set)) throw new SetupError(block === 'source:github' ? 'repositoryUnset' : 'lastSource')
     const { machine } = this.host
     const probe = this.probe()
     // The checks of the chat Sources, in one place.
@@ -101,7 +100,7 @@ export class Setup {
     if (set.github && set.gitlab) throw new SetupError('codeHostsBoth')
     const account = set.gitlab ? await resolveGitlab(machine, settings.sources.gitlab?.config, probe) : undefined
     const deployment: Deployment = account ? { ...machine, repository: account.project, gitlab: account }
-      : checksGithub(settings) ? await resolveDeployment(machine, settings.sources.github?.config, probe) : machine
+      : checksGithub(set) ? await resolveDeployment(machine, settings.sources.github?.config, probe) : machine
     const feishu = await resolveFeishuBot(machine, settings.sources.feishu?.config, probe).catch((error: unknown) => {
       if (!(error instanceof SetupError)) throw error
       // A code host comes with its repository. Without one the chat Source is all there is to run, so its failure stops setup.

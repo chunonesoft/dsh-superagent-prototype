@@ -274,6 +274,16 @@ it('reads a stored GitHub Source configuration that names a merge account withou
   expect(settings.sources.github!.config).toEqual({ repository: 'acme/widgets', cli: 'gh-agent', pollSeconds: 120 })
 })
 
+it('reads a stored list of blocked commands that names glab, and still refuses the commands workers need', () => {
+  // A list saved before the GitLab Source existed may name glab, and its shim ignores the entry.
+  expect(SettingsSchema.parse({ executor: { blockedCommands: ['glab'] } }).executor.blockedCommands).toEqual(['glab'])
+  expect(SettingsSchema.parse({ executor: { blockedCommands: ['personal-gh'] } }).executor.blockedCommands).toEqual(['personal-gh'])
+  for (const name of ['gh', 'git', 'lark-cli']) {
+    const refused = SettingsSchema.safeParse({ executor: { blockedCommands: [name] } })
+    expect(refused.success ? [] : refused.error.issues.map(issue => issue.message)).toEqual(['gh, git, lark-cli cannot be blocked'])
+  }
+})
+
 describe('assessment outcomes', () => {
   const settings = (mode: 'auto' | 'observe') => {
     const parsed = SettingsSchema.parse({})

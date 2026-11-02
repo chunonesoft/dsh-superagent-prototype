@@ -74,20 +74,24 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
 
 /**
  * The git configuration sections of a GitLab account: its CLI as the credential helper of the instance's origin, and the instance's SSH
- * addresses rewritten to that origin, so a clone in either form uses the agent's account and not the operator's SSH keys.
+ * addresses rewritten to the instance's root, so a clone in either form uses the agent's account and not the operator's SSH keys.
+ * The root is `web_url` without the project, which is the origin unless GitLab is served under a relative URL root. The credential key
+ * stays scheme and host, because a key with a path matches no request. The host comes from the instance, so it is written quoted.
  */
-function gitlabSections({ origin, cli }: GitlabAccount): string[] {
+function gitlabSections({ origin, cli, webUrl, project }: GitlabAccount): string[] {
   const { hostname } = new URL(origin)
+  const { pathname } = new URL(webUrl)
+  const root = `${origin}${pathname.endsWith(`/${project}`) ? pathname.slice(0, -project.length) : '/'}`
   return [`[credential ${gitQuote(origin)}]`, `\thelper = ${gitQuote(credentialHelper(cli))}`,
-    `[url ${gitQuote(`${origin}/`)}]`, `\tinsteadOf = git@${hostname}:`, `\tinsteadOf = ssh://git@${hostname}/`]
+    `[url ${gitQuote(root)}]`, `\tinsteadOf = ${gitQuote(`git@${hostname}:`)}`, `\tinsteadOf = ${gitQuote(`ssh://git@${hostname}/`)}`]
 }
 
 /**
  * Atomically writes worker CLI shims and the isolated git configuration file into the state directory, refusing to overwrite foreign files.
  * Each shim strips the shim directory from PATH before exec so wrapper scripts resolving `gh`, `glab` or `lark-cli` by name reach the real binary.
- * Without a GitHub account, `gh` fails and the git configuration has no GitHub credential helper or rewrite, and git cannot push to
- * github.com; a GitLab account gets the same for its instance, whose SSH addresses are rewritten to its origin. Either way the file still
- * shuts out the operator's own configuration, and `glab` fails without a GitLab account.
+ * Without a GitHub account, `gh` fails, the git configuration has no GitHub credential helper or rewrite, and the common github.com
+ * address forms are sent to `github.invalid` when pushed. A GitLab account gets a credential helper for its instance and the rewrite of
+ * its SSH addresses, and `glab` fails without one. The file shuts out the operator's own configuration in every case.
  */
 export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'gitlab' | 'feishu'>, blockedCommands: readonly string[]): Promise<void> {
   const { stateDir, repository, github, gitlab, feishu } = deployment
@@ -126,7 +130,7 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
     ...github ? ['[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
       '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/'] : [],
     ...gitlab ? gitlabSections(gitlab) : [],
-    // With no GitHub account a push to github.com goes to a `.invalid` address, which never resolves, instead of reaching GitHub with whatever credentials git finds.
+    // With no GitHub account the common github.com address forms are sent to `github.invalid` when pushed; the TLD never resolves.
     ...github ? [] : ['[url "https://github.invalid/"]', '\tpushInsteadOf = https://github.com/', '\tpushInsteadOf = git@github.com:', '\tpushInsteadOf = ssh://git@github.com/'],
     // Include Git LFS filters because the operator's global gitconfig (which usually holds them) is ignored.
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',

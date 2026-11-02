@@ -12,7 +12,7 @@ import { jobRegistry } from './fixtures/host.ts'
 import { evalsHealth } from '../src/app/views/overview.ts'
 import { mandateInstructions } from '../src/executor/dsh.ts'
 import { masterPrompt } from '../src/app/context.ts'
-import { reference, testMachine } from './fixtures/deployment.ts'
+import { reference, testGitlabDeployment, testMachine } from './fixtures/deployment.ts'
 import type { Machine } from '../src/deployment.ts'
 import { SCHEMA_VERSION, Store } from '../src/app/store.ts'
 import { TextCache } from '../src/app/cache.ts'
@@ -730,6 +730,14 @@ it('links Channels and Threads for people, finds tickets by a bare PR number, an
   expect(threadList(viewsOf(runtime), 'all', 0, 10).items.map(thread => thread.key)).toContain(home)
   await receive(feishu('9', '别的群的消息', { chat_id: 'oc_elsewhere' }))
   expect(search(viewsOf(runtime), '别的群', new TextCache(0)).items).toEqual([expect.objectContaining({ filtered: { code: 'chat_not_allowed' }, threadTitle: undefined })])
+})
+
+it('links a GitHub Channel to its repository on GitHub only, never to the GitLab project of a GitLab deployment', async () => {
+  const issue = () => runtime.links()(githubChannel(7)).url
+  expect(issue()).toBe('https://github.com/acme/widgets/issues/7')
+  // A GitLab deployment holds its project as `repository` too, which names nothing on GitHub.
+  vi.spyOn(runtime.setup, 'deployment', 'get').mockReturnValue(testGitlabDeployment())
+  expect(issue()).toBe('')
 })
 
 it('counts every step of the day\'s flow over the same arriving messages and lists the same accepted Decisions', async () => {

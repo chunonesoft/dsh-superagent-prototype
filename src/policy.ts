@@ -85,8 +85,10 @@ export const EvalConfigSchema = z.object({
   timeoutSeconds: z.number().int().min(LIMITS.evalTimeoutSeconds.min).max(LIMITS.evalTimeoutSeconds.max).default(120),
   model: RoleModelSchema.nullable().default(null),
 }).strict()
+// A list saved before the GitLab Source existed may name glab, and its shim ignores the entry, so only the other commands are refused.
+const REFUSED_COMMANDS = WORKER_COMMANDS.filter(name => name !== 'glab')
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
-  .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
+  .refine(name => !REFUSED_COMMANDS.includes(name), `${REFUSED_COMMANDS.join(', ')} cannot be blocked`)
 /** Executor settings: worker model, concurrency, ticket directory root (empty defaults to `<stateDir>/work`), `prepare` command, and blocked commands. */
 export const ExecutorConfigSchema = z.object({
   model: RoleModelSchema.nullable().default(null),
