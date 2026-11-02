@@ -3,14 +3,18 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Store } from '../src/app/store.ts'
-import { Prompts, builtInBase, composePrompt, defaultPrompts, policySection, promptParts, type PromptConfig } from '../src/app/prompts.ts'
-import { USER_ERRORS, UserError } from '../src/core/index.ts'
+import { Prompts, builtInBase, builtInParts, composePrompt, defaultPrompts, policySection, promptParts, type PromptConfig } from '../src/app/prompts.ts'
+import { USER_ERRORS, UserError, key } from '../src/core/index.ts'
 import { KV } from '../src/kv.ts'
 import { SettingsSchema, policyVersion } from '../src/policy.ts'
 import { guides, handoffPolicy, mainAdmissionPolicy, masterPrompt, sharedPrompt, workerPrompt } from '../src/app/context.ts'
 import { promptFile } from '../src/app/skill-files.ts'
 import { packagePath } from '../src/infra/paths.ts'
-import type { Variable } from '../src/app/execution-environment.ts'
+import { environmentOf, type Variable } from '../src/app/execution-environment.ts'
+import { githubKind } from '../src/sources/github.ts'
+import { gitlabKind } from '../src/sources/gitlab.ts'
+import { SourceRegistry } from '../src/sources/registry.ts'
+import { testChatDeployment, testDeployment, testGitlabDeployment } from './fixtures/deployment.ts'
 
 /** The execution environment outside any ticket, as the runtime passes it once setup has finished. */
 const variables = (): Variable[] => [{ key: 'DSH_SUPERAGENT_GITHUB_REPOSITORY', value: 'acme/widgets', description: { zh: '仓库', en: 'The repository' }, owner: 'github' }]
@@ -120,6 +124,58 @@ it('registers the built-in Source skills, Feishu only with a Feishu bot, before 
     expect(skills[1]![1]).toContain('## CLI usage')
     expect(skills[2]![1]).toBe('Tag releases.')
     expect(new Prompts(store, () => 100000, variables, () => false).skills(config).map(([name]) => name)).toEqual(['github', 'release'])
+  })
+})
+
+it('offers the GitLab skill only on a GitLab deployment, in place of the GitHub one', () => {
+  withStore(store => {
+    const config = { ...defaultPrompts(), skills: { release: 'Tag releases.' } }
+    const skills = (feishu: boolean, gitlab: boolean) => new Prompts(store, () => 100000, variables, () => feishu, () => gitlab).skills(config)
+    const names = (feishu: boolean, gitlab: boolean) => skills(feishu, gitlab).map(([name]) => name)
+    expect(names(true, false)).toEqual(['feishu', 'github', 'release'])
+    expect(names(false, true)).toEqual(['gitlab', 'release'])
+    expect(names(true, true)).toEqual(['feishu', 'gitlab', 'release'])
+    // The skill maps GitHub's words to GitLab's and gives the commands: `glab api` only, never the high-level ones.
+    const gitlab = skills(false, true)[0]![1]
+    expect(gitlab).toContain('a pull request (PR) is a merge request (MR)')
+    expect(gitlab).toContain('`gh` is `glab`')
+    expect(gitlab).toMatch(/Never run `glab mr`/)
+    expect(gitlab).toContain('glab api projects/$PROJECT/merge_requests --method POST -f source_branch=agent/$DSH_SUPERAGENT_NAME')
+    expect(gitlab).toContain('glab api projects/$PROJECT/merge_requests/<iid>/notes --method POST -f body=')
+    // The project's default branch is read from GitLab, never written into the skill.
+    expect(gitlab).not.toMatch(/\b(master|main)\b/)
+    // Its name is no longer free for a team's skill, which the panel's built-in list shows too.
+    expect(() => promptsOf(store).save({ ...defaultPrompts(), skills: { gitlab: 'mine' } }, 0, 'panel')).toThrow('built-in skill')
+    expect(skills(false, true)[0]![1]).toBe(builtInParts()['skill/gitlab'].text)
+  })
+})
+
+it('leaves the skills, prompts and variables of a GitHub deployment as they were when the GitLab Source is loaded too', () => {
+  withStore(store => {
+    const settings = SettingsSchema.parse({})
+    const github = new SourceRegistry(() => settings), both = new SourceRegistry(() => settings)
+    github.register(githubKind); both.register(githubKind); both.register(gitlabKind)
+    for (const deployment of [testDeployment(), testChatDeployment()]) {
+      const environment = (sources: SourceRegistry) => environmentOf({ deployment, sources, settings })
+      const prompts = (sources: SourceRegistry) => new Prompts(store, () => 100000, () => environment(sources), () => true)
+      expect(environment(both)).toEqual(environment(github))
+      expect(environment(both).map(variable => variable.key)).toContain('DSH_SUPERAGENT_GITHUB_REPOSITORY')
+      expect(environment(both).filter(variable => variable.key.includes('GITLAB'))).toEqual([])
+      expect(prompts(both).skills(defaultPrompts())).toEqual(prompts(github).skills(defaultPrompts()))
+      // The same prompt, as its hash shows.
+      for (const role of ['orchestrator', 'worker'] as const) {
+        expect(key(prompts(both).compose(defaultPrompts(), role))).toBe(key(prompts(github).compose(defaultPrompts(), role)))
+      }
+    }
+    // A GitLab deployment gets the GitLab Source's variables, and not the GitHub Source's, which would be empty there.
+    const keys = environmentOf({ deployment: testGitlabDeployment(), sources: both, settings }).map(variable => variable.key)
+    expect(keys.filter(name => name.startsWith('DSH_SUPERAGENT_GITLAB_'))).toEqual(['DSH_SUPERAGENT_GITLAB_PROJECT', 'DSH_SUPERAGENT_GITLAB_ACCOUNT',
+      'DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL', 'DSH_SUPERAGENT_GITLAB_IID', 'DSH_SUPERAGENT_GITLAB_MR_HEAD'])
+    expect(keys.filter(name => name.includes('GITHUB'))).toEqual([])
+    // Commands the workers need are never reported as blocked, whatever an older list stored: glab is no command to avoid on GitLab.
+    const blocked = environmentOf({ deployment: testGitlabDeployment(), sources: both,
+      settings: { ...settings, executor: { ...settings.executor, blockedCommands: ['glab', 'personal-gh'] } } })
+    expect(blocked.find(variable => variable.key === 'DSH_SUPERAGENT_BLOCKED_COMMANDS')!.value).toBe('personal-gh')
   })
 })
 

@@ -21,7 +21,9 @@ function load(name: string) {
   if (!match) throw new Error(`Invalid packaged skill: ${path}`)
   return { name: match[1]!, description: match[2]!, content: match[3]!, path }
 }
-export const bundledSkills = { feishu: load('feishu'), github: load('github') }
+export const bundledSkills = { feishu: load('feishu'), github: load('github'), gitlab: load('gitlab') }
+/** True when `name` is a skill packaged with dsh-superagent, the ones of the Sources. */
+export const isBundledSkill = (name: string): name is keyof typeof bundledSkills => Object.hasOwn(bundledSkills, name)
 /**
  * Loads a built-in prompt file (`prompts/<name>.md`). Source `.md` files are written one sentence per line for
  * readable diffs; `promptFile` joins lines within each paragraph with spaces while keeping blank-line paragraph breaks.

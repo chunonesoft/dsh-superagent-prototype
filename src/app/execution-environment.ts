@@ -2,6 +2,7 @@
 import { join } from 'node:path'
 import type { Ticket, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
+import { WORKER_COMMANDS } from '../infra/environment.ts'
 import type { Settings } from '../policy.ts'
 import type { Localized, VariableSpec } from '../sources/kind.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
@@ -17,18 +18,24 @@ export interface Variable { key: string; value: string; description: Localized; 
 
 export const executionRoot = (settings: Settings, stateDir: string): string => settings.executor.directory || join(stateDir, 'work')
 
-/** Lists all declared variables grouped by owner; `enabled` is false for Sources that are currently switched off. */
-export function declaredVariables(sources: SourceRegistry, settings?: Settings): { owner: string; enabled: boolean; variables: readonly VariableSpec[] }[] {
+/**
+ * Lists all declared variables grouped by owner; `enabled` is false for Sources that are currently switched off. With a `deployment`,
+ * only the Sources whose variables apply to it are listed.
+ */
+export function declaredVariables(sources: SourceRegistry, settings?: Settings, deployment?: Deployment): { owner: string; enabled: boolean; variables: readonly VariableSpec[] }[] {
   const on = new Set(sources.environments(settings).map(item => item.kind.kind))
   return [{ owner: 'executor', enabled: true, variables: EXECUTOR_VARIABLES },
-    ...sources.declarations().map(({ kind, variables }) => ({ owner: kind, enabled: on.has(kind), variables }))]
+    ...sources.declarations(deployment).map(({ kind, variables }) => ({ owner: kind, enabled: on.has(kind), variables }))]
 }
 
 export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string }; trigger?: Trigger }): Variable[] {
   const { deployment, sources, settings, ticket, trigger } = input
-  const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
+  // The worker commands cannot be blocked: an older list may still name one, such as glab, whose shim ignores the entry.
+  const blocked = settings.executor.blockedCommands.filter(name => !WORKER_COMMANDS.includes(name))
+  const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: blocked.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))
   for (const { kind, environment, config } of sources.environments(settings)) {
+    if (environment.applies && !environment.applies(deployment)) continue
     const values = environment.values({ deployment, config, ...trigger ? { trigger } : {} })
     for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: kind.kind })
   }

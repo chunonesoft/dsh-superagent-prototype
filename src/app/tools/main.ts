@@ -156,7 +156,7 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
   const resources: MainResourceHost = { ...host.resources, sessions: host.sessions, settings: host.settings }
   return [
     readTool('Read one page of a resource the resource parameter lists, such as the ticket list or a ticket. Follow next_offset, and next_resource where a page names one.',
-      false, (resource, offset, limit, signal) => readResource(resources, resource, offset, limit, undefined, signal)),
+      false, (resource, offset, limit, signal) => readResource(resources, resource, offset, limit, undefined, signal), resources.gitlab()),
     routeTool(host),
     tool({
       name: 'orchestrator_ticket_retry',

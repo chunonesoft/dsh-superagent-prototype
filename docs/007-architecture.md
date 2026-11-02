@@ -361,16 +361,19 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/kind.ts` | The `SourceKind` protocol |
 | `src/sources/registry.ts` | `SourceRegistry` |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
-| `src/sources/poll.ts` | What GitHub and Feishu polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
+| `src/sources/poll.ts` | What the Sources' polling shares: `POLL_HORIZON_MS`, `polled`, `cursorAt`, `pollFailure`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
 | `src/sources/pulls.ts` | The pull request interface of the code host a deployment works on (`PullHost`: read and bind a pull request, and the chat notices of its end), and which pull requests a Ticket follows, from the Threads of either code host (`pullNumbers`, `pullOf`) |
 | `src/sources/github.ts` | The GitHub kind and plugin entry, exported as `./github-watch`: a poll round of notifications, the pull requests of open Tickets with their CI, and subscribed Threads |
 | `src/sources/github-trigger.ts` | GitHub comments, reviews, Issue bodies and CI changes as Triggers, and GitHub addresses |
 | `src/sources/github-pull.ts` | The pull request rules: which pull requests a Ticket follows (`claimPull`, `observePull`), the closes it reports to the Engine, and `pullEndNotices`, the chat notice of a Ticket that ended merged or closed |
 | `src/sources/github-channel.ts` | The GitHub Channel: comments and review thread replies, `sent` or `gone` |
 | `src/sources/github-read.ts` | CI snapshots, repository reads, the `github/` resources, and `githubThreadContext`: an Issue's or pull request's conversation by page |
+| `src/sources/gitlab.ts` | The GitLab kind and plugin entry, exported as `./gitlab-watch`: a poll round of the agent's Todos (which only locate Threads, read for their notes), the observed project streams and the default branch's pipeline, the merge requests of open Tickets, and subscribed Threads |
 | `src/sources/gitlab-trigger.ts` | GitLab notes, Issue and merge request bodies and pipeline changes as Triggers, and GitLab addresses |
 | `src/sources/gitlab-channel.ts` | The GitLab Channel: notes on an Issue or merge request, `sent` or `gone` |
 | `src/sources/gitlab-mr.ts` | The merge request rules, as `github-pull.ts` has them for pull requests: which merge requests a Ticket follows (`claimMr`, `observeMr`), the closes it reports to the Engine, `mrEndNotices`, and `gitlabPullHost`, the `PullHost` of a GitLab deployment |
+| `src/sources/gitlab-read.ts` | Repository reads, the `gitlab/` resources, and `gitlabThreadContext`: an Issue's or merge request's conversation by page |
+| `skills/dsh-superagent-gitlab/SKILL.md` | The GitLab Source's skill, offered to Sessions of a GitLab installation in place of GitHub's: the words GitLab uses for GitHub's, and the `glab api` calls that open a merge request and post a note |
 | `src/sources/feishu.ts` | The Feishu kind and plugin entry, exported as `./feishu-watch` |
 | `src/sources/feishu-trigger.ts` | Feishu messages as Triggers, by one rule for live events, history pages and topic pages |
 | `src/sources/feishu-loops.ts` | The Feishu loops: the event consumer, history recovery, chat names and polling of subscribed topics |
@@ -413,7 +416,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/pulls.spec.ts` | The pull requests a Ticket follows, read from the Thread keys of either code host |
-| `tests/gitlab.spec.ts` | GitLab notes, Issue and merge request bodies and pipelines as Triggers, GitLab addresses, the Channel's notes, and the merge request rules |
+| `tests/gitlab.spec.ts` | GitLab notes, Issue and merge request bodies and pipelines as Triggers, GitLab addresses, the Channel's notes, the merge request rules, and the GitLab Source: its settings, variables, polls, reads and health |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |

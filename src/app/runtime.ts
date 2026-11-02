@@ -34,6 +34,7 @@ import type { LinkTarget } from './views/records.ts'
 import { candidateCard, repliedTo, sourceLink, type LinkHost } from './links.ts'
 import { eventNotice, followupNotice } from './notices.ts'
 import { githubPullHost } from '../sources/github-pull.ts'
+import { gitlabPullHost } from '../sources/gitlab-mr.ts'
 import { HealthBoard } from '../infra/health.ts'
 import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
@@ -101,7 +102,8 @@ export class Runtime extends Service implements SourceHost {
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
       const feishu = () => setup.configured() && !!setup.deployment.feishu
-      const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
+      const gitlab = () => setup.configured() && !!setup.deployment.gitlab
+      const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu, gitlab)
       const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
       store.set(KV.runtime.masterId, masterId)
       const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
@@ -116,12 +118,16 @@ export class Runtime extends Service implements SourceHost {
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
       const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
-      // The pull requests of the code host setup resolved; none for a deployment that only chat Sources run.
-      const pulls = (): PullHost | undefined => setup.configured() && setup.deployment.github
-        ? githubPullHost(runtime.context({ kind: 'github', health: ['github'] })) : undefined
+      // The pull requests of the code host setup resolved, merge requests on GitLab; none for a deployment that only chat Sources run.
+      const pulls = (): PullHost | undefined => {
+        if (!setup.configured()) return undefined
+        const { deployment } = setup
+        if (deployment.gitlab) return gitlabPullHost(runtime.context({ kind: 'gitlab', health: ['gitlab'] }))
+        return deployment.github ? githubPullHost(runtime.context({ kind: 'github', health: ['github'] })) : undefined
+      }
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx,
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
-        feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
+        feishuPageSize: () => feishuSettings(sources).readPageSize, gitlab, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
         lifetime: this.lifetime,
         closing: () => this.closing(), environment,

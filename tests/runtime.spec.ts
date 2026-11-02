@@ -21,6 +21,7 @@ import { SettingsSchema, policyVersion, type SettingsOrigin } from '../src/polic
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind, pollRound } from '../src/sources/github.ts'
+import { gitlabKind } from '../src/sources/gitlab.ts'
 import { CliError, Commands } from '../src/infra/commands.ts'
 import { UserError, key, runningAssignment, said, threadKey, waitsForPerson, type Trigger } from '../src/core/index.ts'
 import { feishuTrigger } from '../src/sources/feishu.ts'
@@ -94,12 +95,12 @@ const subprocess = { spawn: vi.fn((spec: { argv: readonly string[] }) => {
   return { done: Promise.resolve({ exitCode: answer instanceof Error ? 1 : 0, signal: null }), collected: { stdout: reader(answer instanceof Error ? '' : answer), stderr: reader(answer instanceof Error ? answer.message : '') } }
 }) }
 /** Source account overrides for test setup; `feishu: null` disables the Feishu source. */
-interface Accounts { github?: Record<string, unknown>; feishu?: Record<string, unknown> | null }
+interface Accounts { github?: Record<string, unknown>; gitlab?: Record<string, unknown>; feishu?: Record<string, unknown> | null }
 function seed(store: Store, accounts: Accounts = {}): void {
   const settings = store.settings()
   const { feishu: _feishu, ...others } = settings.sources
   const feishu = accounts.feishu === null ? undefined : { ...settings.sources.feishu?.config, cli: BOT(), ...accounts.feishu }
-  store.saveSettings(SettingsSchema.parse({ ...settings, sources: { ...others, github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT(), ...accounts.github } }, ...feishu ? { feishu: { enabled: true, config: feishu } } : {} } }))
+  store.saveSettings(SettingsSchema.parse({ ...settings, sources: { ...others, github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT(), ...accounts.github } }, ...accounts.gitlab ? { gitlab: { enabled: true, config: accounts.gitlab } } : {}, ...feishu ? { feishu: { enabled: true, config: feishu } } : {} } }))
 }
 let restarts: ReturnType<typeof vi.fn<() => void>>
 async function restart(machine: Partial<Machine> = {}, accounts: Accounts = {}): Promise<Runtime> {
@@ -1024,9 +1025,58 @@ it('runs a deployment that only Feishu runs: its workers get their environment a
   expect(Object.fromEntries(next.ticketEnvironment(ticket).map(variable => [variable.key, variable.value])))
     .toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: '', DSH_SUPERAGENT_GITHUB_ACCOUNT: '', DSH_SUPERAGENT_GITHUB_NUMBER: '' })
   const report = tools.get(sessionId)!.get('orchestrator_report') as unknown as { parameters: { properties: { pr_number: { description: string } } } }
-  expect(report.parameters.properties.pr_number.description).toBe('Omit it: this installation has no GitHub account.')
-  await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 })).rejects.toThrow('no GitHub account')
+  expect(report.parameters.properties.pr_number.description).toBe('Omit it: this installation has no code host.')
+  await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 })).rejects.toThrow('no code host')
   expect(await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'started' })).toMatchObject({ reported: true })
+})
+
+it('runs with the GitHub Source plugin disabled: a GitLab deployment sets up, builds its worker tools and takes pr_number through GitLab', async () => {
+  // Setup probes the agent's GitLab account and project, and then git's credential helper for the instance.
+  answers[`${AGENT()} api user`] = JSON.stringify({ username: 'agent.bot', email: 'agent@example.com' })
+  answers[`${AGENT()} api projects/acme%2Fwidgets`] = JSON.stringify({ id: 42, path_with_namespace: 'acme/widgets', web_url: 'http://git.example.com/acme/widgets',
+    default_branch: 'master', permissions: { project_access: { access_level: 40 }, group_access: null } })
+  answers['git config -z --show-origin --get-all credential.http://git.example.com.helper'] = `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT())}\0`
+  const next = await restart({}, { github: { repository: '', cli: '' }, gitlab: { project: 'acme/widgets', cli: AGENT() } })
+  await next.ready
+  // Only the GitLab Source's plugin is loaded, so the GitHub kind is never registered.
+  next.sources.register(feishuKind); next.sources.register(gitlabKind)
+  expect(next.setupProblem).toBeUndefined()
+  expect(next.configured()).toBe(true)
+  expect(next.deployment).toMatchObject({ repository: 'acme/widgets', gitlab: { login: 'agent.bot', project: 'acme/widgets', projectId: 42 } })
+  expect(next.deployment.github).toBeUndefined()
+  expect(next.sources.kind('github')).toBeUndefined()
+  const { ticket, sessionId } = await acceptedTicket()
+  // The workers' environment names the GitLab project and account, and the GitHub Source's variables, which would be empty, are not there.
+  const variables = Object.fromEntries(next.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))
+  expect(variables).toMatchObject({ DSH_SUPERAGENT_GITLAB_PROJECT: 'acme/widgets', DSH_SUPERAGENT_GITLAB_ACCOUNT: 'agent.bot',
+    DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL: 'agent@example.com', DSH_SUPERAGENT_GITLAB_IID: '', DSH_SUPERAGENT_GITLAB_MR_HEAD: '' })
+  expect(Object.keys(variables).filter(name => name.includes('GITHUB'))).toEqual([])
+  expect(next.prompts.skills(next.prompts.current().config).map(([name]) => name)).toEqual(['feishu', 'gitlab'])
+  // The report tool names the agent's GitLab account, and the read tool offers the GitLab originals in place of GitHub's.
+  const report = tools.get(sessionId)!.get('orchestrator_report') as unknown as { parameters: { properties: { pr_number: { description: string } } } }
+  expect(report.parameters.properties.pr_number.description).toContain('one by agent.bot from a branch named after this ticket')
+  const read = tools.get(sessionId)!.get('orchestrator_read') as unknown as { description: string; parameters: { properties: { resource: { description: string } } } }
+  const offered = read.description + read.parameters.properties.resource.description
+  expect(offered).toContain('gitlab/…: ')
+  expect(offered).not.toContain('github/…')
+  // pr_number is a merge request's iid, read through the project's API.
+  const page = 'http://git.example.com/acme/widgets/merge_requests/7'
+  const merge = (overrides: Record<string, unknown> = {}) => ({ id: 91, iid: 7, title: 'Fix login', description: null, state: 'opened', author: { username: 'agent.bot' },
+    created_at: '2026-11-01T02:00:00.000Z', updated_at: '2026-11-01T02:30:00.000Z', closed_at: null, merged_at: null, source_branch: `agent/${ticket.execution!.name}`,
+    target_branch: 'master', source_project_id: 42, target_project_id: 42, web_url: page, ...overrides })
+  let mr: object = merge({ author: { username: 'carol' } })
+  const run = vi.mocked(Commands.prototype.run).mockImplementation(async (_program, args) =>
+    args[1] === 'projects/42/merge_requests/7' ? JSON.stringify(mr) : '{"ok":true,"data":{}}')
+  await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'not ours', pr_number: 7 })).rejects.toThrow('MR does not belong to this ticket')
+  expect(next.store.tickets.get(ticket.id)!.follows).toBeUndefined()
+  mr = merge()
+  expect(await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'mr open', pr_number: 7 })).toMatchObject({ reported: true })
+  expect(run.mock.calls.filter(call => call[1][1] === 'projects/42/merge_requests/7').length).toBe(2)
+  expect(next.store.tickets.get(ticket.id)!.follows).toEqual([{ thread: 'gitlab:mr:7', own: true }])
+  expect(next.store.threads.get('gitlab:mr:7')).toMatchObject({ subscriptions: [ticket.id], meta: { iid: 7, isMr: true, url: page } })
+  // The worker reads the original through the same API.
+  expect(await runTool(sessionId, 'orchestrator_read', { resource: 'gitlab/merge_requests/7' })).toMatchObject({ text: expect.stringContaining('"iid":7') })
+  await expect(runTool(sessionId, 'orchestrator_read', { resource: 'github/issues/3' })).rejects.toThrow('no GitHub account')
 })
 
 it('rewrites the blocked-command shims when the Executor settings change them, without a restart', async () => {

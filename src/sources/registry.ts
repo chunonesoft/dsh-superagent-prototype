@@ -1,5 +1,6 @@
 /** Registry of installed Source kinds, their configured instances, and the Engine's SourceScope implementation. */
 import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } from '../core/index.ts'
+import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { AdmissionTableSchema, type Settings } from '../policy.ts'
@@ -78,9 +79,10 @@ export class SourceRegistry implements SourceScope {
     const instance = this.resolve(kind, settings.sources[channel.source])
     return instance.enabled && (kind.channel?.allowed?.(channel.address, instance.config) ?? true)
   }
-  /** Environment variable declarations for every installed kind, whether enabled or disabled. */
-  declarations(): { kind: string; variables: readonly VariableSpec[] }[] {
-    return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => kind.environment ? [{ kind: kind.kind, variables: kind.environment.variables }] : [])
+  /** Environment variable declarations for every installed kind, whether enabled or disabled; with a `deployment`, those that apply to it. */
+  declarations(deployment?: Deployment): { kind: string; variables: readonly VariableSpec[] }[] {
+    return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind =>
+      kind.environment && (!deployment || kind.environment.applies?.(deployment) !== false) ? [{ kind: kind.kind, variables: kind.environment.variables }] : [])
   }
   environments(settings = this.settings()) {
     return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => {

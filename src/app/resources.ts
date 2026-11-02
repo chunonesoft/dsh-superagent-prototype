@@ -3,6 +3,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { UserError, key, latestReport, reached, runningAssignment, threadKey, type Ticket, type Trigger } from '../core/index.ts'
 import { batchOf, inputMessage, triggerMessage, workerSessionId } from '../executor/dsh.ts'
 import { readGithub } from '../sources/github-read.ts'
+import { readGitlab } from '../sources/gitlab-read.ts'
 import { feishuReferences, feishuRead } from '../sources/feishu-read.ts'
 import { feishuRef } from '../sources/feishu.ts'
 import { feishuTriggerId } from '../sources/feishu-trigger.ts'
@@ -53,8 +54,11 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'feishu/<trigger-id>/…', holds: 'a Feishu original, as the dsh-superagent-feishu skill describes', executor: true },
   { name: 'github/…', holds: 'a GitHub original, as the dsh-superagent-github skill describes', executor: true },
 ]
-export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(resource => !executor || resource.executor)
-  .map(resource => `${resource.name}: ${resource.holds}`).join('; ')
+/** The originals of a GitLab installation, which `orchestrator_read` offers in place of GitHub's: no `github/…` read can succeed there. */
+const GITLAB_RESOURCE = { name: 'gitlab/…', holds: 'a GitLab original, as the dsh-superagent-gitlab skill describes', executor: true } as const
+export const resourceGrammar = (executor: boolean, gitlab = false): string =>
+  RESOURCES.map(resource => gitlab && resource.name === 'github/…' ? GITLAB_RESOURCE : resource).filter(resource => !executor || resource.executor)
+    .map(resource => `${resource.name}: ${resource.holds}`).join('; ')
 
 export interface ResourceHost {
   readonly store: Pick<Store, 'get' | 'settings' | 'triggers' | 'tickets' | 'threads' | 'read' | 'decisions' | 'replyStatus'>
@@ -67,6 +71,8 @@ export interface ResourceHost {
   /** Whether a Session may read `revision` (the revision it currently runs under or any revision it ran under previously). */
   mayRead(sessionId: string, revision: number): boolean
   feishuPageSize(): number
+  /** Whether the installation works on GitLab, whose originals `gitlab/…` reads in place of `github/…`. */
+  gitlab(): boolean
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
 }
 export interface MainResourceHost extends ResourceHost {
@@ -100,11 +106,12 @@ const trigger = (host: ResourceHost, id: string, ticketId?: string): Trigger => 
   if (ticketId && (!ticket || !readable(host, ticket, found))) throw new UserError('notReached')
   return found
 }
+const SOURCE_NAMES: Readonly<Record<string, string>> = { feishu: 'Feishu', github: 'GitHub', gitlab: 'GitLab' }
 /** Fetch and cache a source resource on offset 0, serving subsequent offsets from the session cache. */
 async function sourcePage(read: Read, source: string, fetch: () => Promise<unknown>) {
   const { host, resource, offset, sessionId } = read
   const body = offset === 0 ? JSON.stringify(await fetch()) : host.pages.get(`${sessionId}:${resource}`)
-  if (body === undefined) throw new Error(`Read this ${source === 'feishu' ? 'Feishu' : 'GitHub'} resource from offset 0 first`)
+  if (body === undefined) throw new Error(`Read this ${SOURCE_NAMES[source]} resource from offset 0 first`)
   if (offset === 0) host.pages.set(`${sessionId}:${resource}`, body)
   return text(read, body)
 }
@@ -207,6 +214,7 @@ const ROUTES: readonly Route[] = [
     return sourcePage(read, 'feishu', () => feishuRead(commands, ref, read.resource, read.host.feishuPageSize()))
   }],
   ['github/', read => sourcePage(read, 'github', () => readGithub(read.host.commands.withSignal(read.signal), read.resource))],
+  ['gitlab/', read => sourcePage(read, 'gitlab', () => readGitlab(read.host.commands.withSignal(read.signal), read.resource))],
   ['trigger/', async read => {
     const { host, rest, ticketId, offset, signal } = read
     if (!rest || rest.includes('/')) throw new Error('Unknown context resource')

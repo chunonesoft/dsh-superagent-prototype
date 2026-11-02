@@ -108,8 +108,11 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   policy?: SourcePolicyPart<Record<string, unknown> & { allowed: { id: string; name?: string }[] }>
   /** Rereads display names for row keys (such as chat names), stores the resolved names in `KV.sources.labels(kind)`, and returns them. */
   refreshLabels?(host: SourceHost, signal?: AbortSignal): Promise<Record<string, string>>
-  /** Variables the kind registers with the execution environment and how their values are computed. */
-  environment?: { variables: readonly VariableSpec[]; values(input: EnvironmentInput<C>): Record<string, string> }
+  /**
+   * Variables the kind registers with the execution environment and how their values are computed. They apply to every deployment, or
+   * only to those `applies` accepts, so a code host's variables are not declared, empty, on an installation that works on the other.
+   */
+  environment?: { variables: readonly VariableSpec[]; values(input: EnvironmentInput<C>): Record<string, string>; applies?(deployment: Deployment): boolean }
 }
 
 export interface SourceInstance<C extends Record<string, unknown> = Record<string, unknown>> { id: string; kind: string; enabled: boolean; config: C }

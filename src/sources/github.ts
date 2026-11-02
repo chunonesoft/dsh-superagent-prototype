@@ -10,14 +10,16 @@ import { branchCiTrigger, ciTrigger, commentTrigger, CommentSchema, githubAddres
 import { githubLink, sendGithub } from './github-channel.ts'
 import type { GithubComment, PullRef } from './github-trigger.ts'
 import { observePull, readPull, type Pull } from './github-pull.ts'
-import { health, sourceContext, type Health, type SourceContext } from './host.ts'
+import { health, sourceContext, type SourceContext } from './host.ts'
 import { pullNumbers } from './pulls.ts'
 import { KV } from '../kv.ts'
-import { cursorAt, pause, POLL_HORIZON_MS, pollThreads as pollEach } from './poll.ts'
+import { cursorAt, pause, POLL_HORIZON_MS, pollFailure, pollThreads as pollEach } from './poll.ts'
 import type { Localized, SourceKind } from './kind.ts'
 import { z } from 'zod'
 
 export { commentTrigger, type GithubComment } from './github-trigger.ts'
+// Shared with the other Sources' polling since it moved to `poll.ts`; it stays importable from here.
+export { pollFailure }
 /** A notification of the agent account; `subject.url` is the API address of its Issue or PR. */
 const NotificationSchema = z.looseObject({
   repository: z.looseObject({ full_name: z.string() }), subject: z.looseObject({ url: z.string().nullish() }),
@@ -106,6 +108,8 @@ export const githubKind: SourceKind<GithubConfig> = {
       return { DSH_SUPERAGENT_GITHUB_REPOSITORY: repository, DSH_SUPERAGENT_GITHUB_ACCOUNT: github.login, DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: github.noreply, DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
         DSH_SUPERAGENT_GITHUB_PR_HEAD: number && trigger?.meta.isPr === true ? `refs/pull/${number}/head` : '' }
     },
+    // An installation that works on GitLab has no use for these, which would all be empty there.
+    applies: deployment => !deployment.gitlab,
   },
   facts: (deployment): Record<string, Localized | string> => deployment?.github ? {
     cli: { zh: `当前账号 @${deployment.github.login}`, en: `Current account @${deployment.github.login}` },
@@ -123,10 +127,6 @@ export function apply(ctx: Context): void {
       .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
     return async () => { controller.abort(); await running }
   })
-}
-/** Returns an error health once `failures` consecutive polls fail, or undefined so a single network interruption stays quiet. */
-export function pollFailure(failures: number, threshold: number, error: unknown): Health | undefined {
-  return failures >= threshold ? health('error', 'pollFailures', { count: String(failures), error: String(error) }) : undefined
 }
 async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   let interval = 60

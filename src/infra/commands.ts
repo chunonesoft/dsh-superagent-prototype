@@ -125,6 +125,11 @@ export class Commands {
       if (items.length < PAGE_SIZE) return validItems(item, list, tally)
     }
   }
+  /** Calls the GitLab API on a path within the configured project and returns the raw output, such as a file's content. */
+  async gitlabRaw(path: string, ...flags: string[]): Promise<string> {
+    const { cli, projectId } = gitlabOf(this.deployment)
+    return this.run(cli, ['api', this.gitlabPath(path, `projects/${projectId}`), ...flags])
+  }
   /** Calls the GitLab API on a path of the agent's account rather than of the project, such as `todos`, validating the JSON output. */
   async gitlabAccount<T>(schema: z.ZodType<T>, path: string): Promise<T> {
     return schema.parse(JSON.parse(await this.run(gitlabOf(this.deployment).cli, ['api', this.gitlabPath(path)])))

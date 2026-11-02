@@ -28,8 +28,8 @@ const presetOf = (rows: readonly Row[], id: string) => rows.map(row => row.confi
 
 it('defines the worker preset Executor Sessions run under, with a shell that moves long commands to the background', async () => {
   const rows = await patched()
-  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-worker-preset',
-    'dsh-superagent-router-preset'])
+  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-gitlab',
+    'dsh-superagent-worker-preset', 'dsh-superagent-router-preset'])
   const preset = presetOf(rows, WORKER_PRESET)
   expect(preset.id).toBe(WORKER_PRESET)
   const plugins = flat(preset.plugins)
@@ -70,4 +70,17 @@ it('defines the router preset the main Session runs under: the worker\'s 5-secon
     '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-ask-user', '@deepseek-ai/dsh-tool-present', '@deepseek-ai/dsh-plan-mode',
     '@deepseek-ai/dsh-plugin-manager/tools', '@deepseek-ai/dsh-plugin-market/tools', '@deepseek-ai/dsh-tool-schedule', '@deepseek-ai/dsh-tool-goal',
     '@deepseek-ai/dsh-command-goal', '@deepseek-ai/dsh-tool-workflow', '@deepseek-ai/dsh-workflow-ptc']) expect(names, name).not.toContain(name)
+})
+
+it('inserts the GitLab Source plugin disabled, built from its own entry, as the Feishu one is', async () => {
+  const rows = await patched()
+  const named = (id: string) => rows.find(row => row.id === id)
+  expect(named('dsh-superagent-gitlab')).toEqual({ id: 'dsh-superagent-gitlab', name: 'dsh-superagent/gitlab-watch', disabled: true })
+  // The GitHub Source plugin stays on, and the Feishu one stays off, and a deployment may switch the GitHub one off.
+  expect(named('dsh-superagent-github')).toEqual({ id: 'dsh-superagent-github', name: 'dsh-superagent/github-watch' })
+  expect(named('dsh-superagent-feishu')).toMatchObject({ disabled: true })
+  const root = join(import.meta.dirname, '..')
+  const exported = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { exports: Record<string, string> }).exports
+  expect(exported['./gitlab-watch']).toBe('./lib/gitlab-watch.js')
+  expect(readFileSync(join(root, 'tsdown.config.ts'), 'utf8')).toContain("'gitlab-watch': 'src/sources/gitlab.ts'")
 })
