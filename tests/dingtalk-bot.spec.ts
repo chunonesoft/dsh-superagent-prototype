@@ -2,7 +2,7 @@
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IDLE_MS, ROBOT_TOPIC, handleFrame, main, openConnection, runConsume, sendMessage, type BotConfig, type Frame, type Io, type Reply }
   from '../src/cli/dingtalk-bot.ts'
@@ -47,10 +47,10 @@ function respond(routes: Record<string, () => Response | Error>) {
 const OPEN = `${API}/v1.0/gateway/connections/open`
 const TOKEN = `${API}/v1.0/oauth2/accessToken`
 const gateway = { [OPEN]: () => answer({ endpoint: 'wss://stream.example.test/connect', ticket: 'tick et' }) }
-function setup(options: { stdin?: string; fetch?: Fetch; signal?: AbortSignal; env?: Record<string, string> } = {}) {
+function setup(options: { stdin?: string | Readable; fetch?: Fetch; signal?: AbortSignal; env?: Record<string, string> } = {}) {
   const out: string[] = [], err: string[] = [], sockets: FakeSocket[] = []
   class Socket extends FakeSocket { constructor(url: string) { super(url); sockets.push(this) } }
-  const io: Io = { env: { DINGTALK_BOT_CONFIG_DIR: join(dir, 'conf'), ...options.env }, stdin: Readable.from(options.stdin ? [options.stdin] : []),
+  const io: Io = { env: { DINGTALK_BOT_CONFIG_DIR: join(dir, 'conf'), ...options.env }, stdin: typeof options.stdin === 'object' ? options.stdin : Readable.from(options.stdin ? [options.stdin] : []),
     stdout: { write: chunk => out.push(chunk) }, stderr: { write: chunk => err.push(chunk) }, fetch: options.fetch ?? respond({}).fetch,
     WebSocket: Socket, signal: options.signal ?? new AbortController().signal }
   return { io, sockets, out: () => out.join(''), err: () => err.join('') }
@@ -134,7 +134,8 @@ describe('event consume', () => {
 
     // On a connection, the process ends with an error line when the gateway disconnects, and the host starts it again.
     const { fetch } = respond(gateway)
-    const run = await configured({ fetch })
+    // The host holds stdin open for as long as it wants the consumer.
+    const run = await configured({ fetch, stdin: new PassThrough() })
     const ended = main(['event', 'consume'], run.io)
     await vi.waitFor(() => { expect(run.sockets).toHaveLength(1) })
     const socket = run.sockets[0]!
@@ -145,6 +146,24 @@ describe('event consume', () => {
     expect(await ended).toBe(1)
     expect(socket.closed).toBe(true)
     expect(JSON.parse(run.err().split('\n').filter(line => line.startsWith('{'))[0]!)).toEqual({ error: { message: expect.stringContaining('disconnect') } })
+  })
+
+  it('ends quietly when its stdin closes, as it does when the host is gone', async () => {
+    const { fetch } = respond(gateway)
+    const host = new PassThrough()
+    const run = await configured({ fetch, stdin: host })
+    const ended = main(['event', 'consume'], run.io)
+    await vi.waitFor(() => { expect(run.sockets).toHaveLength(1) })
+    const socket = run.sockets[0]!
+    socket.emit('open')
+    // Anything the host writes is ignored; only the end of the pipe counts.
+    host.write('noise\n')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(socket.closed).toBe(false)
+    host.end()
+    expect(await ended).toBe(0)
+    expect(socket.closed).toBe(true)
+    expect(run.out()).toBe('')
   })
 
   it('ends when the connection closes or goes silent, and quietly when told to stop', async () => {

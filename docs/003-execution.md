@@ -177,7 +177,7 @@ The GitLab Source reads each Issue and merge request on its own in the same way,
 
 The Feishu event consumer reports every failure, and polling of subscribed topics keeps each failure on its Thread.
 
-The DingTalk event consumer, the `dingtalk-bot event consume` process, reports every failure and is started again after a delay that grows from one second to one minute. The robot reads no history, so a message sent while the consumer or dsh-superagent was down is lost.
+The DingTalk event consumer, the `dingtalk-bot event consume` process, reports every failure and is started again after a delay that grows from one second to one minute. It ends when its stdin closes, so a consumer whose dsh-superagent was killed does not keep the robot's Stream connection; run by hand, it stays until its input ends. The robot reads no history, so a message sent while the consumer or dsh-superagent was down is lost.
 
 A malformed item in a GitHub or GitLab list or a Feishu page is skipped, and the Source's state counts it.
 ### Channel failure

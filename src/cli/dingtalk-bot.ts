@@ -166,7 +166,8 @@ export interface Socket {
 }
 export interface ConsumeIo { fetch: Fetch; WebSocket: new (url: string) => Socket; stdout: Writer; stderr: Writer; signal: AbortSignal }
 /**
- * Prints the robot's messages as one JSON line each until the signal aborts, which ends it quietly. It writes `[event] ready` to stderr
+ * Prints the robot's messages as one JSON line each until the signal aborts, which ends it quietly; as a command it also ends when its
+ * stdin closes, so a consumer whose host is gone does not keep the robot's connection. It writes `[event] ready` to stderr
  * once connected, and fails with a BotError when the connection ends, is told to disconnect or goes silent: the host restarts it.
  */
 export async function runConsume(config: BotConfig, io: ConsumeIo): Promise<void> {
@@ -239,7 +240,14 @@ async function dispatch(argv: string[], io: Io, secrets: string[]): Promise<unkn
       await accessToken(config, io.fetch)
       return { clientId: config.clientId, robotCode: config.robotCode, token: 'ok' }
     }
-    case 'event consume': return runConsume(await configured(), io)
+    case 'event consume': {
+      const config = await configured()
+      // The host holds the consumer's stdin open and never writes to it. When that pipe closes, the host is gone, even one killed too
+      // hard to stop its children, and a consumer that stayed would keep a Stream connection that takes the robot's messages from the next.
+      const orphaned = new AbortController()
+      void (async () => { try { for await (const _ of io.stdin) { /* Nothing is read from the host. */ } } catch { /* A broken pipe ends it too. */ } orphaned.abort() })()
+      return runConsume(config, { ...io, signal: AbortSignal.any([io.signal, orphaned.signal]) })
+    }
     case 'message send': {
       if (!values.title || !values['text-stdin']) throw new BotError('Pass --title and --text-stdin; the text is read from stdin')
       const config = await configured()
