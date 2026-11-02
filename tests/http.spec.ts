@@ -116,3 +116,15 @@ it('lists the project and the agent account of a GitLab deployment the way it do
   expect(await accounts(testGitlabDeployment())).toStrictEqual({ repository: 'acme/widgets', agent: 'agent.bot', feishu })
   expect(await accounts(testGitlabDeployment({ feishu: undefined }))).toStrictEqual({ repository: 'acme/widgets', agent: 'agent.bot', feishu: null })
 })
+
+it('lists the DingTalk robot among the accounts only when the installation has one, and its problem only when it has one', async () => {
+  const dingtalk = { cli: '/bin/false', clientId: 'ding123', robotCode: 'ding-robot' }
+  // The CLI path stays out of the view, and an installation without DingTalk reports exactly what it did before.
+  expect(await accounts(testChatDeployment({ feishu: undefined, dingtalk }))).toStrictEqual({ feishu: null, dingtalk: { clientId: 'ding123', robotCode: 'ding-robot' } })
+  expect(await accounts(testDeployment({ dingtalk }))).toStrictEqual({ repository: 'acme/widgets', agent: 'agent-bot', feishu, dingtalk: { clientId: 'ding123', robotCode: 'ding-robot' } })
+  const problem = new SetupError('dingtalkCliFailed', { output: 'token expired' }).problem
+  const state = async (extra: object) => (await serve({ store: { settings: () => SettingsSchema.parse({}), tickets: { open: () => [] } }, executor: { activeCount: () => 0 },
+    machine: testMachine(), masterId: 'master', health: {}, configured: () => true, deployment: testDeployment(), ...extra })('GET', 'state')).body.setup as Record<string, unknown>
+  expect(await state({})).not.toHaveProperty('dingtalkProblem')
+  expect(await state({ dingtalkProblem: problem })).toMatchObject({ dingtalkProblem: { place: 'dingtalk', code: 'dingtalkCliFailed' } })
+})

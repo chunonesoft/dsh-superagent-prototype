@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { ApiError, caller, usePoll } from '../src/client/api.ts'
 import { apply } from '../src/client/index.tsx'
 import { zh } from '../src/client/locales.ts'
+import { ActionLink, ExternalLink } from '../src/client/widgets.tsx'
 import { SettingsSchema } from '../src/policy.ts'
 
 declare global { var IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -142,4 +143,16 @@ it('tells a dsh-superagent that does not answer from a record it does not have, 
     status: 400, missing: false, unreachable: false })
   expect(await failure(async () => Response.json({ error: 'Unknown ticket', code: 'unknownTicket' }, { status: 404 }))).toEqual({
     message: 'user unknownTicket', status: 404, missing: true, unreachable: false })
+})
+
+it('links a Channel only when it has a page to open', () => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  act(() => { root.render(<><ExternalLink href="https://chat.example.test/x">Open</ExternalLink><ExternalLink href="">DingTalk message</ExternalLink>
+    <ActionLink href="https://chat.example.test/x">Answer</ActionLink><ActionLink href="">Answer here</ActionLink></>) })
+  expect([...host.querySelectorAll('a')].map(link => [link.getAttribute('href'), link.textContent])).toEqual([['https://chat.example.test/x', 'Open'], ['https://chat.example.test/x', 'Answer']])
+  // The label of a Channel with no page stays, as text.
+  expect(host.textContent).toContain('DingTalk message')
+  expect(host.textContent).not.toContain('Answer here')
+  act(() => { root.unmount() })
 })

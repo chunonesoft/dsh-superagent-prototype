@@ -284,6 +284,10 @@ it('reads a stored list of blocked commands that names glab, and still refuses t
   }
 })
 
+it('keeps a stored list that names dingtalk-bot loadable, as one that names glab, since their shims ignore the entry', () => {
+  expect(SettingsSchema.parse({ executor: { blockedCommands: ['dingtalk-bot', 'glab', 'personal-gh'] } }).executor.blockedCommands).toEqual(['dingtalk-bot', 'glab', 'personal-gh'])
+})
+
 describe('assessment outcomes', () => {
   const settings = (mode: 'auto' | 'observe') => {
     const parsed = SettingsSchema.parse({})

@@ -142,6 +142,20 @@ it('reports a service whose Feishu bot setup could not check as running, and rea
   server!.close()
   expect(await run('status', '--url', await answering({ health: { runtime: { state: 'error' } } }, true))).toMatchObject({ code: 1 })
 })
+it('reports a service whose DingTalk bot setup could not check as running, and prints the problem', async () => {
+  processes(service(sleeper()))
+  const dingtalk = { health: { runtime: { state: 'ready', detail: '' }, dingtalk: { state: 'paused', detail: '' } },
+    setup: { problem: null, feishuProblem: null, dingtalkProblem: { code: 'dingtalkCliFailed', detail: 'The bot dingtalk-bot does not work.' } } }
+  const url = await answering(dingtalk, true)
+  const checked = await run('status', '--url', url)
+  expect(checked.code).toBe(0)
+  expect(JSON.parse(checked.stdout)).toMatchObject({ dingtalk: { code: 'dingtalkCliFailed' }, feishu: null })
+  expect(await run('start', '--url', url, '--timeout', '10'))
+    .toMatchObject({ code: 0, stdout: expect.stringContaining('dsh-superagent runs without DingTalk: The bot dingtalk-bot does not work.') })
+  // A service that reports no such problem prints none, as an older one does not know the key.
+  server!.close()
+  expect(JSON.parse((await run('status', '--url', await answering(READY, true))).stdout)).toMatchObject({ dingtalk: null })
+}, 20_000)
 it('exits 2 while a part such as a Source reports an error, which a restart does not fix, and prints what it reports', async () => {
   processes(service(sleeper()))
   const github = { health: { runtime: { state: 'ready', detail: '' }, github: { state: 'error', detail: 'bad token' } }, setup: {} }

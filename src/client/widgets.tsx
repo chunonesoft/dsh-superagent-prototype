@@ -95,9 +95,13 @@ export function SessionButton({ sessionId, label,
     onClick={() => { openSession(sessionId).catch(error => notify(errorText(error))) }}>{label ?? t('openSession')}</Button>
 }
 export function ExternalLink({ href, children, icon = 'external' }: { href: string; children: ReactNode; icon?: IconName }) {
+  // A Channel with no page to open, such as a DingTalk chat, shows its label alone.
+  if (!href) return <span className="dt-icon-link"><Icon name={icon} size={13} />{children}</span>
   return <a className="dt-inline-link dt-icon-link" href={href} {...external}><Icon name={icon} size={13} />{children}</a>
 }
 export function ActionLink({ href, children, icon = 'external' }: { href: string; children: ReactNode; icon?: IconName }) {
+  // With no page to open there is nothing for the button to do.
+  if (!href) return null
   return <a className="dt-btn dt-btn-outline dt-btn-sm" href={href} {...external}><span className="dt-btn-icon"><Icon name={icon}
     size={14} /></span>{children}</a>
 }

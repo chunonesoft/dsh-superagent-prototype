@@ -24,7 +24,7 @@ const SkillNameSchema = z.string().regex(SKILL_NAME).refine(name => !(Object.key
 /** The built-in parts a team may override, by key: both roles' parts, the Source skills, and the generated parts' templates. */
 const PART_KEYS = ['runtime/shared', 'runtime/orchestrator', 'runtime/worker', 'runtime/subscriptions', 'runtime/replies',
   'runtime/dispatch', 'runtime/work', 'runtime/admission', 'runtime/handoff/orchestrator', 'runtime/handoff/worker', 'runtime/environment',
-  'runtime/policy', 'runtime/policy/none', 'skill/feishu', 'skill/github', 'skill/gitlab'] as const
+  'runtime/policy', 'runtime/policy/none', 'skill/feishu', 'skill/github', 'skill/gitlab', 'skill/dingtalk'] as const
 export type PartKey = typeof PART_KEYS[number]
 /** A team's text for a built-in part, and `base`, the key of the built-in text it was edited from. */
 const OverrideSchema = z.object({ text: z.string(),
@@ -70,6 +70,8 @@ export const builtInParts = (): Readonly<Record<PartKey, BuiltInPart>> => parts 
   'skill/github': { roles: BOTH, text: `${sourceSkills.github}\n\n## CLI usage\n${cliNotes}` },
   // The GitLab skill has its own CLI usage: the notes shared here are about `gh`, which an installation on GitLab does not have.
   'skill/gitlab': { roles: BOTH, text: sourceSkills.gitlab },
+  // The CLI notes shared by the Feishu and GitHub skills are about `gh` and `lark-cli`; the DingTalk skill has its own words for `dingtalk-bot`.
+  'skill/dingtalk': { roles: BOTH, text: sourceSkills.dingtalk },
 }
 /** The key of a built-in text, which an override's `base` records. */
 export const builtInBase = (text: string): string => key('prompt-built-in', text)
@@ -137,9 +139,12 @@ export class PromptConflict extends Error {}
  */
 export class Prompts {
   private readonly versions: Versions<PromptVersion>
-  /** @param feishu - whether a Feishu bot is configured; @param gitlab - whether the installation works on GitLab, whose skill replaces GitHub's. */
+  /**
+   * @param feishu - whether a Feishu bot is configured; @param gitlab - whether the installation works on GitLab, whose skill replaces GitHub's;
+   * @param dingtalk - whether a DingTalk bot is configured.
+   */
   constructor(private readonly store: Store, private readonly maxChars: () => number, private readonly environment: () => Variable[] | undefined,
-    private readonly feishu: () => boolean, private readonly gitlab: () => boolean = () => false) {
+    private readonly feishu: () => boolean, private readonly gitlab: () => boolean = () => false, private readonly dingtalk: () => boolean = () => false) {
     this.versions = new Versions(store, KV.prompts.revision, KV.prompts.version)
   }
   /** A role's prompt; the main Session's Policy section follows the settings as they are now, at each model request. */
@@ -147,11 +152,12 @@ export class Prompts {
     return composePrompt(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined)
   }
   /**
-   * Returns skills to register in every Session: built-in Source skills (`feishu` only when a Feishu bot is configured, and `gitlab` in
-   * place of `github` when the installation works on GitLab) followed by team skills.
+   * Returns skills to register in every Session: built-in Source skills (`feishu` and `dingtalk` only when their bot is configured, and
+   * `gitlab` in place of `github` when the installation works on GitLab) followed by team skills.
    */
   skills(config: PromptConfig): [string, string][] {
-    return [...this.feishu() ? ['feishu'] : [], this.gitlab() ? 'gitlab' : 'github', ...Object.keys(config.skills)].map(name => [name, composeSkill(config, name)])
+    return [...this.feishu() ? ['feishu'] : [], ...this.dingtalk() ? ['dingtalk'] : [], this.gitlab() ? 'gitlab' : 'github', ...Object.keys(config.skills)]
+      .map(name => [name, composeSkill(config, name)])
   }
   current(): PromptVersion {
     const revision = this.versions.revision()

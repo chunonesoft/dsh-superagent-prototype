@@ -40,3 +40,15 @@ it('keeps a message for a Source that is not installed waiting, and sends it onc
   await at(5000)
   expect([h.runtime.outbox.status('waiting'), sent.map(message => message.id)]).toEqual(['sent', ['waiting']])
 })
+
+it('applies the chat word limit to DingTalk replies', () => {
+  const channel = { source: 'dingtalk', thread: 'dingtalk:cid-test==', address: { conversationId: 'cid-test==', thread: 'cid-test==:msg-1' } }
+  const send = (id: string, text: string, kind: OutboundMessage['kind']) => () => { h.runtime.outbox.send({ id, channel, text, kind }) }
+  // Over the limit, a reply is refused before it is queued, so the agent shortens it, as for Feishu.
+  expect(send('long', 'word '.repeat(101), 'reply')).toThrow('maximum is 100')
+  expect(h.runtime.outbox.status('long')).toBeUndefined()
+  expect(send('short', 'Done.', 'reply')).not.toThrow()
+  expect(h.runtime.outbox.status('short')).toBe('pending')
+  // Acknowledgements and notices are composed by the host and checked where they are decided.
+  expect(send('notice', 'word '.repeat(101), 'notice')).not.toThrow()
+})

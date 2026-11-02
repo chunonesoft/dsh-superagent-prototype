@@ -383,6 +383,11 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
+| `src/sources/dingtalk.ts` | The DingTalk kind and plugin entry, exported as `./dingtalk-watch`: the chats and direct messages it receives, the Policy's list of staff IDs, and no observed scope, history or roster sync |
+| `src/sources/dingtalk-trigger.ts` | DingTalk robot messages as Triggers, whichever shape they come in; which Thread a quote joins, by the message it quotes or the marker in the title of the reply it quotes (`replyTitle`, `markerIn`); and DingTalk addresses |
+| `src/sources/dingtalk-channel.ts` | The DingTalk Channel: replies through the session webhook while it lives, else through the robot API, `sent` or `gone` by one predicate over the API's answer |
+| `src/sources/dingtalk-loops.ts` | The DingTalk loops: the event consumer, restarted with backoff, and the keeping of what a quote needs for 14 days |
+| `skills/dsh-superagent-dingtalk/SKILL.md` | The DingTalk Source's skill: what the robot cannot read, how replies reach the conversation and carry their marker, and what `dingtalk-bot` does |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
@@ -418,6 +423,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/pulls.spec.ts` | The pull requests a Ticket follows, read from the Thread keys of either code host |
+| `tests/dingtalk.spec.ts` | DingTalk robot messages as Triggers, the Channel's webhook and API sends, the DingTalk Source's settings and variables, `dingtalk-bot` through `Commands`, and the event consumer: its lines, its restarts with backoff and what it keeps for quotes |
 | `tests/gitlab.spec.ts` | GitLab notes, Issue and merge request bodies and pipelines as Triggers, GitLab addresses, the Channel's notes, the merge request rules, and the GitLab Source: its settings, variables, polls, reads and health |
 | `tests/dingtalk-bot.spec.ts` | The `dingtalk-bot` CLI against stand-ins for DingTalk: its configuration, the Stream consumer, the sends through a webhook and the robot API, and how a failure is reported |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |

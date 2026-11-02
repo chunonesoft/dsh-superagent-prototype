@@ -1,5 +1,5 @@
 /**
- * Process environment and CLI shims that bind git, gh, glab, and lark-cli to the deployment's accounts and block disallowed commands.
+ * Process environment and CLI shims that bind git, gh, glab, lark-cli, and dingtalk-bot to the deployment's accounts and block disallowed commands.
  * Variables read by workers avoid `KEY|PASSWORD|SECRET|TOKEN` in their names because DSH strips credential-shaped variables from child environments.
  * Provides default-path guardrails rather than an OS-level security boundary, as workers run under the operator's OS user.
  */
@@ -15,7 +15,7 @@ const MARKER = '# Written by dsh-superagent on every start; edits are lost.'
 /** Markers of files written under the project's earlier names (`dsh-tag`, `dsh-go`, `dsh-freelancer`), which `dsh-superagent` owns and replaces too. */
 const LEGACY_MARKERS = ['dsh-tag', 'dsh-go', 'dsh-freelancer'].map(name => `# Written by ${name} on every start; edits are lost.`)
 /** Commands workers need, which `blockedCommands` cannot block: the shims and git. */
-export const WORKER_COMMANDS: readonly string[] = ['gh', 'git', 'glab', 'lark-cli']
+export const WORKER_COMMANDS: readonly string[] = ['gh', 'git', 'glab', 'lark-cli', 'dingtalk-bot']
 export const workerBin = (stateDir: string): string => join(stateDir, 'worker-bin')
 export const workerGitConfig = (stateDir: string): string => join(stateDir, 'worker-gitconfig')
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
@@ -88,13 +88,13 @@ function gitlabSections({ origin, cli, webUrl, project }: GitlabAccount): string
 
 /**
  * Atomically writes worker CLI shims and the isolated git configuration file into the state directory, refusing to overwrite foreign files.
- * Each shim strips the shim directory from PATH before exec so wrapper scripts resolving `gh`, `glab` or `lark-cli` by name reach the real binary.
+ * Each shim strips the shim directory from PATH before exec so wrapper scripts resolving `gh`, `glab`, `lark-cli` or `dingtalk-bot` by name reach the real binary.
  * Without a GitHub account, `gh` fails, the git configuration has no GitHub credential helper or rewrite, and the common github.com
  * address forms are sent to `github.invalid` when pushed. A GitLab account gets a credential helper for its instance and the rewrite of
  * its SSH addresses, and `glab` fails without one. The file shuts out the operator's own configuration in every case.
  */
-export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'gitlab' | 'feishu'>, blockedCommands: readonly string[]): Promise<void> {
-  const { stateDir, repository, github, gitlab, feishu } = deployment
+export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'gitlab' | 'feishu' | 'dingtalk'>, blockedCommands: readonly string[]): Promise<void> {
+  const { stateDir, repository, github, gitlab, feishu, dingtalk } = deployment
   const dir = workerBin(stateDir)
   await mkdir(dir, { recursive: true })
   const before = await readdir(dir)
@@ -117,6 +117,7 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   await shim('gh', github ? run(github.cli) : fail('gh is unavailable: this installation has no GitHub account.'))
   await shim('glab', gitlab ? run(gitlab.cli) : fail('glab is unavailable: this installation has no GitLab account.'))
   await shim('lark-cli', feishu ? run(feishu.cli) : fail('lark-cli is unavailable: this installation has no Feishu bot.'))
+  await shim('dingtalk-bot', dingtalk ? run(dingtalk.cli) : fail('dingtalk-bot is unavailable: this installation has no DingTalk bot.'))
   const alternative = github ? `; use gh, which acts as ${github.login}` : gitlab ? `; use glab, which acts as ${gitlab.login}` : ''
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
     await shim(name, fail(`${name} is blocked in this installation${alternative}.`))

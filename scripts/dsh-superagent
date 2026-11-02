@@ -90,7 +90,7 @@ def state(url):
         entries = {name: entry if isinstance(entry, dict) else {} for name, entry in health.items()}
         return {'health': {name: entry.get('state') for name, entry in entries.items()},
                 'errors': {name: str(entry.get('detail', '')) for name, entry in entries.items() if entry.get('state') == 'error'},
-                'setup': setup.get('problem'), 'feishu': setup.get('feishuProblem')}
+                'setup': setup.get('problem'), 'feishu': setup.get('feishuProblem'), 'dingtalk': setup.get('dingtalkProblem')}
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -125,7 +125,7 @@ def status(args):
     print(json.dumps({'pids': pids, 'cwd': str(ROOT), 'url': args.url,
                       'manually_stopped': stopped(args.profile), 'health': current and current['health'],
                       'errors': current and current['errors'], 'setup': current and current['setup'],
-                      'feishu': current and current['feishu']}, ensure_ascii=False, indent=2))
+                      'feishu': current and current['feishu'], 'dingtalk': current and current['dingtalk']}, ensure_ascii=False, indent=2))
     return outcome(pids, current)
 
 
@@ -198,6 +198,9 @@ def start(args):
             if current['feishu']:
                 print('dsh-superagent runs without Feishu: ' + str(current['feishu'].get('detail', '')))
                 print('Fix it on the Feishu card of the Source settings.')
+            if current['dingtalk']:
+                print('dsh-superagent runs without DingTalk: ' + str(current['dingtalk'].get('detail', '')))
+                print('Fix it on the DingTalk card of the Source settings.')
             for name, detail in part_errors(current).items():
                 print(f'{name} reports an error, which a restart does not fix: {detail}')
             return code

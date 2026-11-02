@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { Setup } from '../src/app/setup.ts'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, resolveGitlab, sourcesSet, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, executable, machineOf, resolveDeployment, resolveDingtalkBot, resolveFeishuBot, resolveGitlab, sourcesSet, type Machine, type Probe } from '../src/deployment.ts'
 import { workerGitConfig } from '../src/infra/environment.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { gitEnv, subprocess } from './fixtures/git.ts'
@@ -28,6 +28,9 @@ const glab = (file: string, user: object = gitlabUser, project: object = gitlabP
 /** Fake lark-cli script body returning canned auth, strict-mode, and bot info responses. */
 const lark = (status: object, mode = 'bot', bot: object = { bot: { open_id: 'ou_bot', app_name: 'Widgets Bot' }, code: 0 }): string =>
   `case "$*" in\n  "auth status") echo '${JSON.stringify(status)}' ;;\n  "config strict-mode") echo 'strict-mode: ${mode} (source: profile)' ;;\n  "api GET /open-apis/bot/v3/info --as bot --format ndjson") echo '${JSON.stringify(bot)}' ;;\nesac`
+/** Fake dingtalk-bot CLI answering `auth status` with `status`, as the real one prints it once a token can be had. */
+const dingtalkBot = (file: string, status: object = { clientId: 'ding123', robotCode: 'ding123', token: 'ok' }): string =>
+  program(file, `case "$*" in\n  "auth status") echo '${JSON.stringify(status)}' ;;\n  *) exit 1 ;;\nesac`)
 const minimal = (overrides: Record<string, unknown> = {}) => ({ stateDir: join(dir, 'state'), ...overrides })
 const machine = (overrides: Partial<Machine> = {}): Machine => ({ ...machineOf(Config(minimal())), ...overrides })
 /** Runs commands like worker shells do, but locally: the stand-ins first on PATH, then the system's git. */
@@ -41,6 +44,7 @@ beforeEach(async () => {
   gh(join(dir, 'bin', 'gh'), 'Agent-Bot')
   glab(join(dir, 'bin', 'glab'))
   program(join(dir, 'bin', 'lark-cli'), lark({ appId: 'cli_bot', brand: 'lark', identities: { bot: { status: 'ready' } } }))
+  dingtalkBot(join(dir, 'bin', 'dingtalk-bot'))
   // Stale worker shims with the same binary name must be skipped regardless of PATH normalization or symlinks.
   program(join(dir, 'state', 'worker-bin', 'gh'))
   program(join(dir, 'state', 'worker-bin', 'glab'))
@@ -175,6 +179,25 @@ describe('setup', () => {
   })
 })
 
+describe('DingTalk bot', () => {
+  it('treats only a working bot CLI as set up', async () => {
+    // A DingTalk Source that names no CLI is no bot, and one that names a working CLI is the bot its `auth status` reports.
+    expect(await resolveDingtalkBot(machine(), {}, probe, path)).toBeUndefined()
+    expect(await resolveDingtalkBot(machine(), { cli: 'dingtalk-bot' }, probe, path)).toEqual({ cli: join(dir, 'bin', 'dingtalk-bot'), clientId: 'ding123', robotCode: 'ding123' })
+    expect(sourcesSet(settingsOf({ dingtalk: { cli: 'dingtalk-bot' } }, false)).dingtalk).toBe(true)
+    const refuses = async (code: string, values: Record<string, unknown> = {}, cli = 'dingtalk-bot') =>
+      expect(resolveDingtalkBot(machine(), { cli }, probe, path)).rejects.toEqual(setupError('dingtalk', code, values))
+    // Output that does not name the app and robot, or whose token is not ok, is not a bot.
+    dingtalkBot(join(dir, 'bin', 'dingtalk-bot'), { clientId: 'ding123' })
+    await refuses('dingtalkNoApp')
+    dingtalkBot(join(dir, 'bin', 'dingtalk-bot'), { clientId: 'ding123', robotCode: 'ding123', token: 'expired' })
+    await refuses('dingtalkNoApp')
+    program(join(dir, 'bin', 'dingtalk-bot'), 'echo "No configuration found." >&2; exit 1')
+    await refuses('dingtalkCliFailed', { output: expect.stringContaining('No configuration found.') })
+    await refuses('dingtalkCliFailed', { output: expect.stringContaining('is not an executable file') }, join(dir, 'bin', 'missing'))
+  })
+})
+
 /** Settings whose Sources hold `config`, by Source ID. */
 const settingsOf = (config: Record<string, Record<string, unknown>>, enabled = true) =>
   SettingsSchema.parse({ sources: Object.fromEntries(Object.entries(config).map(([id, value]) => [id, { enabled, config: value }])) })
@@ -198,6 +221,9 @@ describe('Setup', () => {
   const github = () => ({ repository: 'acme/widgets', cli: join(dir, 'bin', 'gh') })
   const gitlab = () => ({ project: 'acme/widgets', cli: join(dir, 'bin', 'glab') })
   const feishu = () => ({ cli: join(dir, 'bin', 'lark-cli') })
+  const dingtalk = () => ({ cli: join(dir, 'bin', 'dingtalk-bot') })
+  const feishuOff = () => program(join(dir, 'bin', 'lark-cli'), lark({ appId: 'cli_bot', identities: { bot: { status: 'ready' } } }, 'off'))
+  const dingtalkOff = () => program(join(dir, 'bin', 'dingtalk-bot'), 'echo "token expired" >&2; exit 1')
   const started: Setup[] = []
   afterEach(() => { for (const setup of started.splice(0)) setup.restore() })
   /** Runs setup as the Runtime does at startup, over the Sources' configuration `config`: the stand-in CLIs above and the real git, with the agent environment applied to this process until `restore`. */
@@ -337,5 +363,73 @@ describe('Setup', () => {
     // Clearing GitHub from an installation that holds both is the way out of codeHostsBoth, whatever state the GitLab account is in.
     await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, gitlab: broken }))).resolves.toBeUndefined()
     await expect(setup.checkAccounts('source:gitlab', settingsOf({ github: github(), gitlab: { project: '', cli: '' } }))).resolves.toBeUndefined()
+  })
+
+  it('resolves with no code host when a DingTalk Source is set', async () => {
+    const { setup, resolved } = await start({ dingtalk: dingtalk() })
+    expect(resolved).toBe(true)
+    expect(setup.problem).toBeUndefined()
+    expect(setup.deployment).toMatchObject({ dingtalk: { cli: join(dir, 'bin', 'dingtalk-bot'), clientId: 'ding123', robotCode: 'ding123' } })
+    expect([setup.deployment.repository, setup.deployment.github, setup.deployment.feishu]).toEqual([undefined, undefined, undefined])
+    // The worker shim runs the bot CLI, so a worker's `dingtalk-bot` is the bot.
+    expect(readFileSync(join(dir, 'agent', 'worker-bin', 'dingtalk-bot'), 'utf8')).toContain(join(dir, 'bin', 'dingtalk-bot'))
+  })
+  it('makes a DingTalk Source that fails the setup problem when it is the only one', async () => {
+    dingtalkOff()
+    const alone = await start({ dingtalk: dingtalk() })
+    expect(alone.resolved).toBe(false)
+    expect(alone.setup.problem).toMatchObject({ place: 'dingtalk', code: 'dingtalkCliFailed', values: { output: expect.stringContaining('token expired') } })
+    expect(alone.setup.dingtalkProblem).toBeUndefined()
+    // With a code host to run, the same failure leaves only DingTalk out.
+    const hosted = await start({ dingtalk: dingtalk(), github: github() })
+    expect(hosted.resolved).toBe(true)
+    expect(hosted.setup.dingtalkProblem).toMatchObject({ place: 'dingtalk', code: 'dingtalkCliFailed' })
+    expect([hosted.setup.problem, hosted.setup.deployment.dingtalk]).toEqual([undefined, undefined])
+  })
+  it('sets up on the chat Source that works when the other one fails, and stops when none does', async () => {
+    feishuOff()
+    const feishuFails = await start({ feishu: feishu(), dingtalk: dingtalk() })
+    expect(feishuFails.resolved).toBe(true)
+    expect(feishuFails.setup.feishuProblem).toMatchObject({ place: 'feishu', code: 'feishuUserIdentity' })
+    expect([feishuFails.setup.dingtalkProblem, feishuFails.setup.problem, feishuFails.setup.deployment.feishu]).toEqual([undefined, undefined, undefined])
+    expect(feishuFails.setup.deployment.dingtalk).toMatchObject({ robotCode: 'ding123' })
+    program(join(dir, 'bin', 'lark-cli'), lark({ appId: 'cli_bot', identities: { bot: { status: 'ready' } } }))
+    dingtalkOff()
+    const dingtalkFails = await start({ feishu: feishu(), dingtalk: dingtalk() })
+    expect(dingtalkFails.resolved).toBe(true)
+    expect(dingtalkFails.setup.dingtalkProblem).toMatchObject({ place: 'dingtalk', code: 'dingtalkCliFailed' })
+    expect([dingtalkFails.setup.feishuProblem, dingtalkFails.setup.deployment.dingtalk]).toEqual([undefined, undefined])
+    expect(dingtalkFails.setup.deployment.feishu).toMatchObject({ botId: 'ou_bot' })
+    // Neither works, and nothing else runs the installation: setup stops on the first, and records no problem of a Source left out.
+    feishuOff()
+    const neither = await start({ feishu: feishu(), dingtalk: dingtalk() })
+    expect(neither.resolved).toBe(false)
+    expect(neither.setup.problem).toMatchObject({ place: 'feishu', code: 'feishuUserIdentity' })
+    expect([neither.setup.feishuProblem, neither.setup.dingtalkProblem]).toEqual([undefined, undefined])
+  })
+  it('refuses to clear the last DingTalk CLI of a DingTalk-only installation', async () => {
+    const { setup } = await start({ dingtalk: dingtalk() })
+    await expect(setup.checkAccounts('source:dingtalk', settingsOf({ dingtalk: { cli: '' } }))).rejects.toMatchObject({ place: 'deployment', code: 'lastSource' })
+    // Clearing the GitHub Source of an installation that holds nothing else is refused as before, and a working DingTalk Source is a Source to keep.
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, dingtalk: { cli: '' } }))).rejects.toMatchObject({ code: 'repositoryUnset' })
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, dingtalk: dingtalk() }))).resolves.toBeUndefined()
+    await expect(setup.checkAccounts('source:dingtalk', settingsOf({ dingtalk: dingtalk() }))).resolves.toBeUndefined()
+  })
+  it('checks the DingTalk Source that is saved, and a save that would leave no chat Source working', async () => {
+    const { setup } = await start({ feishu: feishu(), dingtalk: dingtalk() })
+    // With no code host, a save is refused when the Source it saves fails, or when none of the chat Sources works.
+    dingtalkOff()
+    await expect(setup.checkAccounts('source:dingtalk', settingsOf({ feishu: feishu(), dingtalk: dingtalk() }))).rejects.toMatchObject({ place: 'dingtalk', code: 'dingtalkCliFailed' })
+    await expect(setup.checkAccounts('source:feishu', settingsOf({ feishu: feishu(), dingtalk: dingtalk() }))).resolves.toBeUndefined()
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, feishu: feishu(), dingtalk: dingtalk() }))).resolves.toBeUndefined()
+    feishuOff()
+    await expect(setup.checkAccounts('source:feishu', settingsOf({ feishu: feishu(), dingtalk: dingtalk() }))).rejects.toMatchObject({ place: 'feishu', code: 'feishuUserIdentity' })
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, feishu: feishu(), dingtalk: dingtalk() }))).rejects.toMatchObject({ place: 'feishu' })
+    // With a code host, only the Source that is saved is checked, as for Feishu.
+    const hosted = await start({ gitlab: gitlab() })
+    await expect(hosted.setup.checkAccounts('source:dingtalk', settingsOf({ gitlab: gitlab(), dingtalk: dingtalk() }))).rejects.toMatchObject({ place: 'dingtalk', code: 'dingtalkCliFailed' })
+    await expect(hosted.setup.checkAccounts('source:feishu', settingsOf({ gitlab: gitlab(), feishu: { cli: '' }, dingtalk: dingtalk() }))).resolves.toBeUndefined()
+    dingtalkBot(join(dir, 'bin', 'dingtalk-bot'))
+    await expect(hosted.setup.checkAccounts('source:dingtalk', settingsOf({ gitlab: gitlab(), dingtalk: dingtalk() }))).resolves.toBeUndefined()
   })
 })

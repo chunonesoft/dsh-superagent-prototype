@@ -63,4 +63,11 @@ export const KV = {
   feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
     topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),
     seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
+  /**
+   * DingTalk Source: what a quote needs to find its Thread, kept for 14 days. A message's record names the Thread it belongs to (a quote of
+   * the message joins it), and a marker's record the Thread whose replies carry that marker in their title (a quote of a reply joins it);
+   * `at` is when the Source last saw either.
+   */
+  dingtalk: { root: family<{ thread: string; at: string }, [msgId: string]>('dingtalk-root:'),
+    marker: family<{ thread: string; at: string }, [marker: string]>('dingtalk-marker:') },
 }

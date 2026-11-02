@@ -1,4 +1,4 @@
-/** Subprocess wrapper for running gh, glab, lark-cli, and git commands under the deployment's configured accounts. */
+/** Subprocess wrapper for running gh, glab, lark-cli, dingtalk-bot, and git commands under the deployment's configured accounts. */
 import { execFile } from 'node:child_process'
 import { basename } from 'node:path'
 import { promisify } from 'node:util'
@@ -57,7 +57,7 @@ function membership(error: unknown): unknown {
   return new CliError(hint, error.code, error.exitCode)
 }
 /**
- * Executes gh, glab, lark-cli, and git subprocesses with deployment account credentials, timeouts, and abort signals.
+ * Executes gh, glab, lark-cli, dingtalk-bot, and git subprocesses with deployment account credentials, timeouts, and abort signals.
  * Restricts GitHub API calls to the configured repository and GitLab API calls to the configured project, and translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
  */
 export class Commands {
@@ -74,10 +74,17 @@ export class Commands {
     return this.deployment.repository!
   }
   withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
-  async run(program: string, args: string[], cwd?: string): Promise<string> {
+  /** Runs `program` and returns its output; `stdin` is the text it reads on standard input, which stays open and unused without it. */
+  async run(program: string, args: string[], cwd?: string, stdin?: string): Promise<string> {
     try {
-      const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+      const pending = exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
         env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
+      if (stdin !== undefined) {
+        // A program that ends without reading its input closes the pipe; how it ended is what the caller hears.
+        pending.child.stdin?.on('error', () => {})
+        pending.child.stdin?.end(stdin)
+      }
+      const { stdout } = await pending
       return stdout
     } catch (error) { throw commandError(error, program) }
   }
@@ -152,6 +159,15 @@ export class Commands {
     const code = result.error?.code
     if (!result.ok) throw membership(new CliError(`${result.error?.message ?? 'Feishu command failed'}${code ? ` (${code})` : ''}`, code))
     return result.data
+  }
+  /**
+   * Runs the DingTalk bot's `dingtalk-bot` CLI and returns the JSON it prints; `stdin` is the text its `--text-stdin` option reads.
+   * @throws CliError with the HTTP status the CLI reports as `code`. Its message never holds the arguments, which may carry a session webhook.
+   */
+  async dingtalk(args: string[], stdin?: string): Promise<unknown> {
+    const bot = this.deployment.dingtalk
+    if (!bot) throw new Error('The DingTalk Source has no working bot CLI')
+    return JSON.parse(await this.run(bot.cli, args, undefined, stdin)) as unknown
   }
   /** Runs `git` on PATH using the agent's isolated git environment and credential helper. */
   async git(args: string[], cwd: string): Promise<string> { return this.run('git', args, cwd) }

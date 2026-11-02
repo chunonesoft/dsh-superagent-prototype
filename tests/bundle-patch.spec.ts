@@ -28,7 +28,7 @@ const presetOf = (rows: readonly Row[], id: string) => rows.map(row => row.confi
 
 it('defines the worker preset Executor Sessions run under, with a shell that moves long commands to the background', async () => {
   const rows = await patched()
-  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-gitlab',
+  expect(rows.map(row => row.id)).toEqual(['dsh-superagent', 'dsh-superagent-github', 'dsh-superagent-feishu', 'dsh-superagent-gitlab', 'dsh-superagent-dingtalk',
     'dsh-superagent-worker-preset', 'dsh-superagent-router-preset'])
   const preset = presetOf(rows, WORKER_PRESET)
   expect(preset.id).toBe(WORKER_PRESET)
@@ -83,4 +83,19 @@ it('inserts the GitLab Source plugin disabled, built from its own entry, as the 
   const exported = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { exports: Record<string, string> }).exports
   expect(exported['./gitlab-watch']).toBe('./lib/gitlab-watch.js')
   expect(readFileSync(join(root, 'tsdown.config.ts'), 'utf8')).toContain("'gitlab-watch': 'src/sources/gitlab.ts'")
+})
+
+it('inserts the DingTalk Source plugin disabled, built from its own entry, with the CLI the Source runs', async () => {
+  const rows = await patched()
+  expect(rows.find(row => row.id === 'dsh-superagent-dingtalk')).toEqual({ id: 'dsh-superagent-dingtalk', name: 'dsh-superagent/dingtalk-watch', disabled: true })
+  const root = join(import.meta.dirname, '..')
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { exports: Record<string, string>; bin: Record<string, string>; files: string[] }
+  expect(manifest.exports['./dingtalk-watch']).toBe('./lib/dingtalk-watch.js')
+  // The bot CLI ships with the package: a command that runs the built `lib/dingtalk-bot.js`.
+  expect(manifest.bin).toEqual({ 'dingtalk-bot': './bin/dingtalk-bot' })
+  expect(manifest.files).toContain('bin')
+  expect(readFileSync(join(root, manifest.bin['dingtalk-bot']!), 'utf8')).toContain('../lib/dingtalk-bot.js')
+  const build = readFileSync(join(root, 'tsdown.config.ts'), 'utf8')
+  expect(build).toContain("'dingtalk-watch': 'src/sources/dingtalk.ts'")
+  expect(build).toContain("'dingtalk-bot': 'src/cli/dingtalk-bot.ts'")
 })

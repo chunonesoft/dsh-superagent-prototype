@@ -49,9 +49,10 @@ export const GithubAccountsSchema = z.object({
 })
 export const GitlabAccountsSchema = z.object({ project: z.string().trim().default(''), cli: z.string().trim().default('') })
 export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
+export const DingtalkBotSchema = z.object({ cli: z.string().trim().default('') })
 /** Source configuration keys that affect deployment setup and trigger a restart when changed. */
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape),
-  gitlab: Object.keys(GitlabAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
+  gitlab: Object.keys(GitlabAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape), dingtalk: Object.keys(DingtalkBotSchema.shape) }
 
 /** The agent's GitHub account: the CLI it acts through, its login, and its commit email. */
 export interface GithubAccount { cli: string; login: string; noreply: string }
@@ -71,8 +72,11 @@ export interface Deployment extends Machine {
   github?: GithubAccount
   gitlab?: GitlabAccount
   feishu?: FeishuBot
+  dingtalk?: DingtalkBot
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
+/** The DingTalk robot a bot CLI reports: the app's `clientId` and the `robotCode` the robot sends with. The app's secret stays in the CLI's own configuration. */
+export interface DingtalkBot { cli: string; clientId: string; robotCode: string }
 
 /** The agent's GitHub account, for code that acts only on a GitHub deployment. @throws when the deployment has none. */
 export function githubOf(deployment: Pick<Deployment, 'github'>): GithubAccount {
@@ -212,4 +216,22 @@ export async function resolveFeishuBot(machine: Machine, feishu: unknown, probe:
   const info = parsed(BotInfo, (await run('api', 'GET', '/open-apis/bot/v3/info', '--as', 'bot', '--format', 'ndjson')).split('\n')[0] ?? '')
   if (!info) return fail(new SetupError('feishuNoBot'))
   return { cli, appId: status.appId, brand: status.brand, botId: info.bot.open_id, name: info.bot.app_name }
+}
+
+const BotStatus = z.object({ clientId: z.string().min(1), robotCode: z.string().min(1), token: z.literal('ok') })
+/**
+ * Verify that the configured DingTalk bot CLI works: its `auth status` names the app and the robot, and has got a token with the app's secret.
+ * Workers invoke this CLI as `dingtalk-bot`. It sends as the robot only and has no command that reads a person's messages, and its
+ * secret lives in its own configuration, never in the settings.
+ */
+export async function resolveDingtalkBot(machine: Machine, dingtalk: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<DingtalkBot | undefined> {
+  const { cli: name } = DingtalkBotSchema.parse(dingtalk ?? {})
+  if (!name) return undefined
+  const fail = (error: unknown): never => { throw error instanceof SetupError ? error : new SetupError('dingtalkCliFailed', { output: reason(error) }) }
+  let cli = ''
+  try { cli = executable(name, path, workerBin(machine.stateDir)) } catch (error) { fail(error) }
+  const text = await probe([cli, 'auth', 'status']).catch(fail)
+  const status = parsed(BotStatus, text.slice(text.indexOf('{')))
+  if (!status) return fail(new SetupError('dingtalkNoApp'))
+  return { cli, clientId: status.clientId, robotCode: status.robotCode }
 }

@@ -104,6 +104,25 @@ it('shows a dash for the repository and the agent account of a deployment that o
     .toEqual([[zh.deploymentRepository, '—'], [zh.deploymentAgent, '—'], [zh.deploymentFeishu, 'Widgets Bot']])
 })
 
+it('lists the DingTalk robot among the derived accounts only when the installation has one or its check failed', async () => {
+  const { form } = fakeForm()
+  // Each state is read by a page of its own, as the Plugin Manager mounts one on each visit.
+  const rows = async () => {
+    const container = document.createElement('div'); document.body.append(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => { root.render(<PluginConfig t={translator(zh)} view="page" form={{ state: form.getSnapshot(), mutate: form.mutate }} />) })
+      await settle()
+      return all('.dt-kv > div').map(row => [...row.children].map(cell => cell.textContent))
+    } finally { act(() => { root.unmount() }); container.remove() }
+  }
+  server.setup = { ...server.setup, accounts: { feishu: null, dingtalk: { clientId: 'ding123', robotCode: 'ding-robot' } } }
+  expect(await rows()).toEqual([[zh.deploymentRepository, '—'], [zh.deploymentAgent, '—'], [zh.deploymentFeishu, zh.deploymentFeishuNone], [zh.deploymentDingtalk, 'ding-robot']])
+  server.setup = { ...server.setup, accounts: { feishu: null },
+    dingtalkProblem: { place: 'dingtalk', code: 'dingtalkCliFailed', values: {}, detail: 'The bot dingtalk-bot does not work.' } }
+  expect((await rows()).at(-1)).toEqual([zh.deploymentDingtalk, zh['setup.dingtalkCliFailed']])
+})
+
 it('tells a dsh-superagent that is starting from a browser that cannot write on the Deployment page', async () => {
   const { form: shared, publish } = fakeForm()
   server.form = shared
