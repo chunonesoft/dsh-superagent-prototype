@@ -358,6 +358,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/infra/paths.ts` | The package's root, where packaged files are |
 | `src/infra/text.ts` | Word counts and the chat message limit, `fill` and `sameName` |
 | `src/infra/health.ts` | The `HealthBoard`, every part's health entry, each claimed by its one writer |
+| `src/cli/dingtalk-bot.ts` | The `dingtalk-bot` CLI, built as `lib/dingtalk-bot.js`: a DingTalk enterprise robot over Stream mode and the robot API (`config init`, `auth status`, `event consume`, `message send`), with only Node's `fetch` and `WebSocket`; it imports nothing of the package, and its errors print a status and DingTalk's words, never the request |
+| `bin/dingtalk-bot` | The package's `dingtalk-bot` command: a shebang that runs `lib/dingtalk-bot.js` |
 | `src/sources/kind.ts` | The `SourceKind` protocol |
 | `src/sources/registry.ts` | `SourceRegistry` |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
@@ -417,6 +419,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/pulls.spec.ts` | The pull requests a Ticket follows, read from the Thread keys of either code host |
 | `tests/gitlab.spec.ts` | GitLab notes, Issue and merge request bodies and pipelines as Triggers, GitLab addresses, the Channel's notes, the merge request rules, and the GitLab Source: its settings, variables, polls, reads and health |
+| `tests/dingtalk-bot.spec.ts` | The `dingtalk-bot` CLI against stand-ins for DingTalk: its configuration, the Stream consumer, the sends through a webhook and the robot API, and how a failure is reported |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |

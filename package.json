@@ -8,6 +8,9 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "bin": {
+    "dingtalk-bot": "./bin/dingtalk-bot"
+  },
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -21,6 +24,7 @@
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
+    "bin",
     "lib",
     "cordis.patch.yml",
     "locale/*.json",
