@@ -152,9 +152,9 @@ it('reports a service whose DingTalk bot setup could not check as running, and p
   expect(JSON.parse(checked.stdout)).toMatchObject({ dingtalk: { code: 'dingtalkCliFailed' }, feishu: null })
   expect(await run('start', '--url', url, '--timeout', '10'))
     .toMatchObject({ code: 0, stdout: expect.stringContaining('dsh-superagent runs without DingTalk: The bot dingtalk-bot does not work.') })
-  // A service that reports no such problem prints none, as an older one does not know the key.
+  // A service that reports no such problem, as an older one does not know the key, prints no key either: its output is what it was before.
   server!.close()
-  expect(JSON.parse((await run('status', '--url', await answering(READY, true))).stdout)).toMatchObject({ dingtalk: null })
+  expect(JSON.parse((await run('status', '--url', await answering(READY, true))).stdout)).not.toHaveProperty('dingtalk')
 }, 20_000)
 it('exits 2 while a part such as a Source reports an error, which a restart does not fix, and prints what it reports', async () => {
   processes(service(sleeper()))

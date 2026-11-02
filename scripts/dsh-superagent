@@ -122,10 +122,14 @@ def outcome(pids, current):
 def status(args):
     pids = processes(args.profile)
     current = state(args.url) if pids else None
-    print(json.dumps({'pids': pids, 'cwd': str(ROOT), 'url': args.url,
-                      'manually_stopped': stopped(args.profile), 'health': current and current['health'],
-                      'errors': current and current['errors'], 'setup': current and current['setup'],
-                      'feishu': current and current['feishu'], 'dingtalk': current and current['dingtalk']}, ensure_ascii=False, indent=2))
+    report = {'pids': pids, 'cwd': str(ROOT), 'url': args.url,
+              'manually_stopped': stopped(args.profile), 'health': current and current['health'],
+              'errors': current and current['errors'], 'setup': current and current['setup'],
+              'feishu': current and current['feishu']}
+    # Only a DingTalk problem is reported, so an installation without DingTalk prints what it printed before the Source existed.
+    if current and current['dingtalk']:
+        report['dingtalk'] = current['dingtalk']
+    print(json.dumps(report, ensure_ascii=False, indent=2))
     return outcome(pids, current)
 
 

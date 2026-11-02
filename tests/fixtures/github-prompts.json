@@ -1,0 +1,301 @@
+{
+  "commit": "6337fc823ce20251c8de8085948165c81aaa701e",
+  "prompts": {
+    "github": {
+      "main": {
+        "sha": "befd980e7c5c02023547100d58cfc69f50c5928c236eb711696efdd0928d712f",
+        "parts": {
+          "runtime/shared": "0d8a09cb4827ac199606bb7b986a862ed982acfe5a8476c74d518d348831626e",
+          "runtime/orchestrator": "638cc6cf89425387a780a83591324e7d6d2fef556a973261321ff2bdd562127f",
+          "communication": "ee3554698a37d648a29b349b9387f84585cbce574746efc667a1bcc665171b56",
+          "scope": "4bedde2e4ff24ae0d39c34be3b32cf72addaeaece38ac2519ef359dd5be0711d",
+          "delivery": "8d21e595bb0545fc9cb8f6cfc4d6640548a9dbdf201db1ee76003498d7a0d067",
+          "runtime/subscriptions": "61de942e36883e10863dfdcb2a3a2625a977f3296d7bb7fe29b87b2cf4c4a375",
+          "runtime/replies": "dcf567956a3f5012740020a6ba25cdd65d18fc16f304571e032d87ae87aa0e24",
+          "runtime/dispatch": "9e49c17878b5d78ac332c6e393810083cb65614bcd56289ffdbee84ff2d152b5",
+          "runtime/admission": "beade956b0e720601a2d05daa9d13f92ef8692daa30c2665650d59756e13721e",
+          "runtime/handoff": "ecf41b8cd8f4852654a6db7f2668c2c5d33a4a4a8f8ba46e932508cdb20f7523",
+          "runtime/environment": "b2f8d567a02cf3fc00081bee89491e9d5c6c6ccf13f6124e3384a02fed8e86c6",
+          "runtime/policy": "198ecc6e381453e07af0ee3a5e17203d7f989fb1fb517473ddca810ebf0119aa"
+        }
+      },
+      "worker": {
+        "sha": "7f20934ee599bbd0d888e21c958bb94b3246335267239d69217ab5e51ebeff9c",
+        "parts": {
+          "runtime/shared": "0d8a09cb4827ac199606bb7b986a862ed982acfe5a8476c74d518d348831626e",
+          "runtime/worker": "8c7e4c3f3592006fb52e9493906e7a007b246b211b5cf99ef809efa035796793",
+          "communication": "ee3554698a37d648a29b349b9387f84585cbce574746efc667a1bcc665171b56",
+          "scope": "4bedde2e4ff24ae0d39c34be3b32cf72addaeaece38ac2519ef359dd5be0711d",
+          "delivery": "8d21e595bb0545fc9cb8f6cfc4d6640548a9dbdf201db1ee76003498d7a0d067",
+          "runtime/subscriptions": "61de942e36883e10863dfdcb2a3a2625a977f3296d7bb7fe29b87b2cf4c4a375",
+          "runtime/replies": "dcf567956a3f5012740020a6ba25cdd65d18fc16f304571e032d87ae87aa0e24",
+          "runtime/work": "0c904225fb0919059415bb2f785763b79eed38dcd9a8fd59aa546e4683c49b57",
+          "runtime/handoff": "5f25e025121122c5bf41b7037b40b3a1e9f1fd8a73286998468c643739091720",
+          "runtime/environment": "8b9abb4f001ad12bd38f67767339da96f421c831d9a5069ab24941072901b05c"
+        }
+      }
+    },
+    "github-feishu": {
+      "main": {
+        "sha": "a32c5a20247026454f8c3a8b9fb1a65e3220dea239a88e6aee1f5dc41a438d3e",
+        "parts": {
+          "runtime/shared": "0d8a09cb4827ac199606bb7b986a862ed982acfe5a8476c74d518d348831626e",
+          "runtime/orchestrator": "638cc6cf89425387a780a83591324e7d6d2fef556a973261321ff2bdd562127f",
+          "communication": "ee3554698a37d648a29b349b9387f84585cbce574746efc667a1bcc665171b56",
+          "scope": "4bedde2e4ff24ae0d39c34be3b32cf72addaeaece38ac2519ef359dd5be0711d",
+          "delivery": "8d21e595bb0545fc9cb8f6cfc4d6640548a9dbdf201db1ee76003498d7a0d067",
+          "runtime/subscriptions": "61de942e36883e10863dfdcb2a3a2625a977f3296d7bb7fe29b87b2cf4c4a375",
+          "runtime/replies": "dcf567956a3f5012740020a6ba25cdd65d18fc16f304571e032d87ae87aa0e24",
+          "runtime/dispatch": "9e49c17878b5d78ac332c6e393810083cb65614bcd56289ffdbee84ff2d152b5",
+          "runtime/admission": "beade956b0e720601a2d05daa9d13f92ef8692daa30c2665650d59756e13721e",
+          "runtime/handoff": "ecf41b8cd8f4852654a6db7f2668c2c5d33a4a4a8f8ba46e932508cdb20f7523",
+          "runtime/environment": "1e4a2fefa22f995382093840a34276e538c8d7675f59ecfaf74474694eb60e60",
+          "runtime/policy": "198ecc6e381453e07af0ee3a5e17203d7f989fb1fb517473ddca810ebf0119aa"
+        }
+      },
+      "worker": {
+        "sha": "616a94aa34e7c9fda8938d9f4bc78f270e3ad87b3ee7809b6ce830caee4c4614",
+        "parts": {
+          "runtime/shared": "0d8a09cb4827ac199606bb7b986a862ed982acfe5a8476c74d518d348831626e",
+          "runtime/worker": "8c7e4c3f3592006fb52e9493906e7a007b246b211b5cf99ef809efa035796793",
+          "communication": "ee3554698a37d648a29b349b9387f84585cbce574746efc667a1bcc665171b56",
+          "scope": "4bedde2e4ff24ae0d39c34be3b32cf72addaeaece38ac2519ef359dd5be0711d",
+          "delivery": "8d21e595bb0545fc9cb8f6cfc4d6640548a9dbdf201db1ee76003498d7a0d067",
+          "runtime/subscriptions": "61de942e36883e10863dfdcb2a3a2625a977f3296d7bb7fe29b87b2cf4c4a375",
+          "runtime/replies": "dcf567956a3f5012740020a6ba25cdd65d18fc16f304571e032d87ae87aa0e24",
+          "runtime/work": "0c904225fb0919059415bb2f785763b79eed38dcd9a8fd59aa546e4683c49b57",
+          "runtime/handoff": "5f25e025121122c5bf41b7037b40b3a1e9f1fd8a73286998468c643739091720",
+          "runtime/environment": "84230a219f9c59bf8071c156d832d78a5f67632557fbc2020e68b53e8f434947"
+        }
+      }
+    }
+  },
+  "skills": {
+    "github": [
+      {
+        "name": "dsh-superagent-github",
+        "description": "Read GitHub issues, pull requests, reviews and CI using gh.",
+        "content": "ce8835eb8e6653478ce9993a1dcd23f5282f2b7c897916cde35c2cff1864deed"
+      }
+    ],
+    "github-feishu": [
+      {
+        "name": "dsh-superagent-feishu",
+        "description": "Read Feishu messages, threads, nested forwards, attachments and documents using the bot identity.",
+        "content": "7d48dd91b18f538f0a4150c208b34f02c595e86d5bdb2c5d91c18c5fe573c202"
+      },
+      {
+        "name": "dsh-superagent-github",
+        "description": "Read GitHub issues, pull requests, reviews and CI using gh.",
+        "content": "ce8835eb8e6653478ce9993a1dcd23f5282f2b7c897916cde35c2cff1864deed"
+      }
+    ]
+  },
+  "deployment": {
+    "github": {
+      "repository": "acme/widgets",
+      "github": {
+        "cli": "<dir>/bin/gh-agent",
+        "login": "Agent-Bot",
+        "noreply": "7+Agent-Bot@users.noreply.github.com"
+      }
+    },
+    "github-feishu": {
+      "repository": "acme/widgets",
+      "github": {
+        "cli": "<dir>/bin/gh-agent",
+        "login": "Agent-Bot",
+        "noreply": "7+Agent-Bot@users.noreply.github.com"
+      },
+      "feishu": {
+        "cli": "<dir>/bin/lark-bot",
+        "appId": "cli_bot",
+        "brand": "lark",
+        "botId": "ou_bot",
+        "name": "Widgets Bot"
+      }
+    }
+  },
+  "environment": {
+    "github": {
+      "gitconfig": [
+        "# Written by dsh-superagent on every start; edits are lost.",
+        "[user]",
+        "\tuseConfigOnly = true",
+        "[credential]",
+        "\thelper =",
+        "[credential \"https://github.com\"]",
+        "\thelper = \"!'/opt/agent/gh-agent' auth git-credential\"",
+        "[url \"https://github.com/\"]",
+        "\tinsteadOf = git@github.com:",
+        "\tinsteadOf = ssh://git@github.com/",
+        "[filter \"lfs\"]",
+        "\tclean = git-lfs clean -- %f",
+        "\tsmudge = git-lfs smudge -- %f",
+        "\tprocess = git-lfs filter-process",
+        "\trequired = true",
+        ""
+      ],
+      "shims": {
+        "gh": "53ffc9218e8f5c4e85e15380dc7611dc3c450c6d37190a8bc27d833c81ebe2cf",
+        "lark-cli": "a8cc671c19da7957407bc0b2a636852b07f50f963ee05aefb310f66e8bd53d16",
+        "personal-gh": "fb6ea971f778e17b88b4f0452cc620fabaa5b74f79f11534cb60ebd7522a2764"
+      }
+    },
+    "github-feishu": {
+      "gitconfig": [
+        "# Written by dsh-superagent on every start; edits are lost.",
+        "[user]",
+        "\tuseConfigOnly = true",
+        "[credential]",
+        "\thelper =",
+        "[credential \"https://github.com\"]",
+        "\thelper = \"!'/opt/agent/gh-agent' auth git-credential\"",
+        "[url \"https://github.com/\"]",
+        "\tinsteadOf = git@github.com:",
+        "\tinsteadOf = ssh://git@github.com/",
+        "[filter \"lfs\"]",
+        "\tclean = git-lfs clean -- %f",
+        "\tsmudge = git-lfs smudge -- %f",
+        "\tprocess = git-lfs filter-process",
+        "\trequired = true",
+        ""
+      ],
+      "shims": {
+        "gh": "53ffc9218e8f5c4e85e15380dc7611dc3c450c6d37190a8bc27d833c81ebe2cf",
+        "lark-cli": "6dc69599537737463fa1814cfa24c0953981943db304339ef3746687347a3586",
+        "personal-gh": "fb6ea971f778e17b88b4f0452cc620fabaa5b74f79f11534cb60ebd7522a2764"
+      }
+    }
+  },
+  "status": {
+    "healthy": {
+      "code": 0,
+      "output": [
+        "{",
+        "  \"pids\": [",
+        "    4242",
+        "  ],",
+        "  \"cwd\": \"<checkout>\",",
+        "  \"url\": \"http://127.0.0.1:<port>\",",
+        "  \"manually_stopped\": false,",
+        "  \"health\": {",
+        "    \"runtime\": \"ready\",",
+        "    \"models\": \"ready\",",
+        "    \"evals\": \"ready\",",
+        "    \"assessment\": \"ready\",",
+        "    \"launch\": \"ready\",",
+        "    \"delivery\": \"ready\",",
+        "    \"relay\": \"ready\",",
+        "    \"notice\": \"ready\",",
+        "    \"reply\": \"ready\",",
+        "    \"github\": \"ready\"",
+        "  },",
+        "  \"errors\": {},",
+        "  \"setup\": null,",
+        "  \"feishu\": null",
+        "}",
+        ""
+      ]
+    },
+    "a part reports an error": {
+      "code": 2,
+      "output": [
+        "{",
+        "  \"pids\": [",
+        "    4242",
+        "  ],",
+        "  \"cwd\": \"<checkout>\",",
+        "  \"url\": \"http://127.0.0.1:<port>\",",
+        "  \"manually_stopped\": false,",
+        "  \"health\": {",
+        "    \"runtime\": \"ready\",",
+        "    \"models\": \"ready\",",
+        "    \"evals\": \"ready\",",
+        "    \"assessment\": \"ready\",",
+        "    \"launch\": \"ready\",",
+        "    \"delivery\": \"ready\",",
+        "    \"relay\": \"ready\",",
+        "    \"notice\": \"ready\",",
+        "    \"reply\": \"ready\",",
+        "    \"github\": \"error\"",
+        "  },",
+        "  \"errors\": {",
+        "    \"github\": \"3 consecutive failed polls; last: Error: bad token\"",
+        "  },",
+        "  \"setup\": null,",
+        "  \"feishu\": null",
+        "}",
+        ""
+      ]
+    },
+    "setup waits": {
+      "code": 3,
+      "output": [
+        "{",
+        "  \"pids\": [",
+        "    4242",
+        "  ],",
+        "  \"cwd\": \"<checkout>\",",
+        "  \"url\": \"http://127.0.0.1:<port>\",",
+        "  \"manually_stopped\": false,",
+        "  \"health\": {",
+        "    \"runtime\": \"paused\",",
+        "    \"models\": \"ready\",",
+        "    \"evals\": \"ready\",",
+        "    \"assessment\": \"ready\",",
+        "    \"launch\": \"ready\",",
+        "    \"delivery\": \"ready\",",
+        "    \"relay\": \"ready\",",
+        "    \"notice\": \"ready\",",
+        "    \"reply\": \"ready\",",
+        "    \"github\": \"ready\"",
+        "  },",
+        "  \"errors\": {},",
+        "  \"setup\": {",
+        "    \"place\": \"github\",",
+        "    \"code\": \"repositoryUnset\",",
+        "    \"values\": {},",
+        "    \"detail\": \"The GitHub Source names no repository.\"",
+        "  },",
+        "  \"feishu\": null",
+        "}",
+        ""
+      ]
+    },
+    "a Feishu bot could not be checked": {
+      "code": 0,
+      "output": [
+        "{",
+        "  \"pids\": [",
+        "    4242",
+        "  ],",
+        "  \"cwd\": \"<checkout>\",",
+        "  \"url\": \"http://127.0.0.1:<port>\",",
+        "  \"manually_stopped\": false,",
+        "  \"health\": {",
+        "    \"runtime\": \"ready\",",
+        "    \"models\": \"ready\",",
+        "    \"evals\": \"ready\",",
+        "    \"assessment\": \"ready\",",
+        "    \"launch\": \"ready\",",
+        "    \"delivery\": \"ready\",",
+        "    \"relay\": \"ready\",",
+        "    \"notice\": \"ready\",",
+        "    \"reply\": \"ready\",",
+        "    \"github\": \"ready\"",
+        "  },",
+        "  \"errors\": {},",
+        "  \"setup\": null,",
+        "  \"feishu\": {",
+        "    \"place\": \"feishu\",",
+        "    \"code\": \"feishuCliFailed\",",
+        "    \"values\": {},",
+        "    \"detail\": \"The bot lark-cli does not work.\"",
+        "  }",
+        "}",
+        ""
+      ]
+    }
+  }
+}
