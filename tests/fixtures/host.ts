@@ -131,8 +131,11 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
   return { service, settle, spawn, live: (id: string) => !!children.get(id)?.live }
 }
 
-/** @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored. */
-export async function startRuntime(seed?: (store: Store) => void) {
+/**
+ * @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored.
+ * @param options.github - false for a deployment that only Feishu runs: its GitHub Source names no account, so there is no code host.
+ */
+export async function startRuntime(seed?: (store: Store) => void, { github = true }: { github?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
   const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot')
   const repository = { default_branch: 'master', permissions: { push: true } }
@@ -148,6 +151,8 @@ export async function startRuntime(seed?: (store: Store) => void) {
     [`${BOT} config strict-mode`]: 'strict-mode: bot (source: profile)',
     [`${BOT} api GET /open-apis/bot/v3/info --as bot --format ndjson`]: '{"bot":{"open_id":"ou_bot"},"code":0,"msg":"ok"}',
     ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT)}\0`,
+    // With no GitHub account the check reads the empty helper that shuts out the operator's.
+    ['git config -z --show-origin --get-all credential.helper']: `file:${workerGitConfig(directory)}\0\0`,
     [scoped]: `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(AGENT)}\0`,
   }
   /** A prepare command (`sh -c`) waits for this while it is set. */
@@ -245,7 +250,8 @@ export async function startRuntime(seed?: (store: Store) => void) {
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   for (const cli of [AGENT, BOT]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const seeded = new Store(join(directory, 'orchestrator.sqlite'))
-  const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } } }
+  const account = github ? { repository: 'acme/widgets', cli: AGENT } : { repository: '', cli: '' }
+  const sources = { github: { enabled: true, config: account }, feishu: { enabled: true, config: { cli: BOT } } }
   seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
   seed?.(seeded)
   seeded.close()

@@ -33,13 +33,14 @@ import { registerHttp, type HttpHost } from './http.ts'
 import type { LinkTarget } from './views/records.ts'
 import { candidateCard, repliedTo, sourceLink, type LinkHost } from './links.ts'
 import { eventNotice, followupNotice } from './notices.ts'
-import { pullEndNotices } from '../sources/github-pull.ts'
+import { githubPullHost } from '../sources/github-pull.ts'
 import { HealthBoard } from '../infra/health.ts'
 import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
 import { Setup } from './setup.ts'
 import { feishuSettings } from '../sources/feishu.ts'
 import { health, type Health, type SourceContext, type SourceHost } from '../sources/host.ts'
+import type { PullHost } from '../sources/pulls.ts'
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
 import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
@@ -115,6 +116,9 @@ export class Runtime extends Service implements SourceHost {
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
       const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
+      // The pull requests of the code host setup resolved; none for a deployment that only chat Sources run.
+      const pulls = (): PullHost | undefined => setup.configured() && setup.deployment.github
+        ? githubPullHost(runtime.context({ kind: 'github', health: ['github'] })) : undefined
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx,
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
@@ -146,9 +150,9 @@ export class Runtime extends Service implements SourceHost {
           if (followup) sessions.relay(followup.id, followup.text)
           // Notify the ticket's conversations whenever it ends via a pull request.
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
-          if (ended && setup.configured() && setup.deployment.repository) {
+          if (ended) {
             const request = store.triggers.get(ended.origin.triggerId)?.text ?? ''
-            for (const message of pullEndNotices(ended, request, setup.deployment.repository)) outbox.send(message)
+            for (const message of pulls()?.endNotices(ended, request) ?? []) outbox.send(message)
           }
         } })
       // Update the `evals` health entry on every pass if an evaluation failed as unavailable within the last hour.
@@ -160,7 +164,7 @@ export class Runtime extends Service implements SourceHost {
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
-        get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
+        get pulls() { return pulls() },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()

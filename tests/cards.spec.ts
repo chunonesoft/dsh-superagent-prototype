@@ -171,6 +171,10 @@ it('shows a ticket card\'s state from a closed set: the open ticket\'s stage, th
   expect(ticketCard(ticket)).not.toHaveProperty('attention')
   expect(ticketCard({ ...ticket, attention: { id: 'q', question: 'Desktop too?' } })).toMatchObject({ attention: { question: 'Desktop too?' } })
 })
+it('shows the pull request a ticket follows as pr_number, on either code host', () => {
+  expect(ticketCard({ ...ticket, follows: [{ thread: 'gitlab:mr:7', own: true }] })).toMatchObject({ pr_number: 7 })
+  expect(ticketCard({ ...ticket, follows: [{ thread: 'gitlab:issue:3', own: false }] })).not.toHaveProperty('pr_number')
+})
 it('shows a decision with snake_case keys and a reference to its details', () => {
   const decision: Decision = { id: 'd1', evalId: 'e1', threadKey: 'github:42', triggerIds: ['request-1'], policyVersion: 'v1', at: 'a', kind: 'accept', reason: [said('r')],
     strength: 'explicit', ticketId: 'ticket-1', audit: { matches: [] } }

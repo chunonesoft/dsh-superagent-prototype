@@ -9,8 +9,9 @@ import { branchCiTrigger, ciTrigger, commentTrigger, CommentSchema, githubAddres
   from './github-trigger.ts'
 import { githubLink, sendGithub } from './github-channel.ts'
 import type { GithubComment, PullRef } from './github-trigger.ts'
-import { observePull, pullsOf, readPull, type Pull } from './github-pull.ts'
+import { observePull, readPull, type Pull } from './github-pull.ts'
 import { health, sourceContext, type Health, type SourceContext } from './host.ts'
+import { pullNumbers } from './pulls.ts'
 import { KV } from '../kv.ts'
 import { cursorAt, pause, POLL_HORIZON_MS, pollThreads as pollEach } from './poll.ts'
 import type { Localized, SourceKind } from './kind.ts'
@@ -407,7 +408,7 @@ async function intakeComments(ctx: SourceContext, ref: PullRef, since: string, r
   }
 }
 export async function pollTicketPulls(ctx: SourceContext, signal?: AbortSignal, round = newRound(signal)): Promise<void> {
-  const numbers = [...new Set(ctx.tickets.open().flatMap(ticket => pullsOf(ticket, true)))]
+  const numbers = [...new Set(ctx.tickets.open().flatMap(ticket => pullNumbers(ticket, true)))]
   for (const number of numbers) {
     if (stopped(ctx, round)) return
     try {

@@ -417,6 +417,35 @@ it('relays a worker\'s report with its ticket card and the start of its summary,
   expect(notices().at(-1)).toMatchObject({ ticket_ended: { ticket_id: ticket.id, state: 'completed' } })
 })
 
+it('describes pr_number by the agent\'s account on the code host', async () => {
+  const { sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  const report = h.tools.get(sessionId)!.get('orchestrator_report') as unknown as { parameters: { properties: { pr_number: { description: string } } } }
+  expect(report.parameters.properties.pr_number.description)
+    .toBe('The ticket\'s PR: its source PR, or one by agent-bot from a branch named after this ticket (DSH_SUPERAGENT_NAME).')
+})
+
+/** Restarts the host as a deployment that only Feishu runs, so there is no code host, and accepts a ticket on it. */
+async function withoutCodeHost() {
+  await h.stop()
+  h = await startRuntime(undefined, { github: false })
+  return h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+}
+
+it('refuses pr_number with no code host', async () => {
+  const { ticket, sessionId } = await withoutCodeHost()
+  await expect(h.runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 })).rejects.toThrow('omit pr_number')
+  // The refused report left no trace: no report, no bound thread.
+  expect(h.runtime.store.tickets.get(ticket.id)!.assignments[0]).not.toHaveProperty('report')
+  expect(h.runtime.store.tickets.get(ticket.id)).not.toHaveProperty('follows')
+})
+
+it('reports without pr_number with no code host', async () => {
+  const { ticket, sessionId } = await withoutCodeHost()
+  expect(await h.runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'started', pr_number: null })).toMatchObject({ reported: true })
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done.' })
+  expect(h.runtime.store.tickets.get(ticket.id)).toMatchObject({ ended: { outcome: 'completed' } })
+})
+
 it('tells the main Session of the settings, prompts, requeues and unsubscriptions others made, never of its own', async () => {
   const save = (args: Record<string, unknown>) => h.runTool(h.runtime.masterId, 'orchestrator_settings_save', args)
   const evaluation = h.runtime.store.settings().eval
