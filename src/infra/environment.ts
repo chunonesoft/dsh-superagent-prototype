@@ -76,7 +76,8 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
  * The git configuration sections of a GitLab account: its CLI as the credential helper of the instance's origin, and the instance's SSH
  * addresses rewritten to the instance's root, so a clone in either form uses the agent's account and not the operator's SSH keys.
  * The root is `web_url` without the project, which is the origin unless GitLab is served under a relative URL root. The credential key
- * stays scheme and host, because a key with a path matches no request. The host comes from the instance, so it is written quoted.
+ * stays scheme and host, because git matches a key with a path only against requests that carry that path, and misses a request that
+ * names the host alone. The host comes from the instance, so it is written quoted.
  */
 function gitlabSections({ origin, cli, webUrl, project }: GitlabAccount): string[] {
   const { hostname } = new URL(origin)

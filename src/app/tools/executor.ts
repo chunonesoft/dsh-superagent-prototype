@@ -87,9 +87,12 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
       execute: async (args, signal) => {
         const current = host.store.tickets.get(ticketId)
         if (!current || !liveTicket(current)) throw new Error('Ticket ended (PR was closed or work finished); do not resume it')
-        if (args.pr_number != null && !pulls) throw new Error('This installation has no code host, so no PR or MR can be bound; omit pr_number')
-        // Read the PR before the transaction, which binds it inside.
-        const claim = args.pr_number != null ? await pulls?.prepare(args.pr_number, signal) : undefined
+        let claim: Awaited<ReturnType<PullHost['prepare']>> | undefined
+        if (args.pr_number != null) {
+          if (!pulls) throw new Error('This installation has no code host, so no PR or MR can be bound; omit pr_number')
+          // Read the PR before the transaction, which binds it inside.
+          claim = await pulls.prepare(args.pr_number, signal)
+        }
         // Claim the PR, record the report, and queue the relay atomically so a rejected PR claim or invalid report leaves no partial state, and a recorded report always reaches the main Session.
         return host.store.atomic(() => {
           const refused = claim?.(ticketId)

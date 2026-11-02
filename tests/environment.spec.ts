@@ -209,9 +209,11 @@ describe('agent git configuration for GitLab', () => {
       expect(await address(remote)).toBe('http://git.example.com/gitlab/acme/widgets.git')
       expect(await address(remote, '--push')).toBe('http://git.example.com/gitlab/acme/widgets.git')
     }
-    // A credential key with a path would match no request, so it stays the origin, and git still asks the agent CLI for that address.
+    // git matches a credential key with a path only against requests that carry that path, and misses one that names the host alone, so the
+    // key stays the origin, and git asks the agent CLI both for an address under the URL root and for the host.
     expect(readFileSync(workerGitConfig(dir), 'utf8')).toContain('[credential "http://git.example.com"]')
     expect((await fill('url=http://git.example.com/gitlab/acme/widgets.git')).stdout).toContain('password=from-the-agent-cli')
+    expect((await fill('protocol=http\nhost=git.example.com')).stdout).toContain('password=from-the-agent-cli')
   })
   it('takes the origin as the root when web_url does not end with the project', async () => {
     await writeEnvironment(gitlab(undefined, { webUrl: 'http://git.example.com/acme/other' }), [])

@@ -7,8 +7,8 @@ import type { SourceContext } from './host.ts'
 import { githubPage, SOURCE, UserSchema } from './github-trigger.ts'
 import { pullNumber, pullNumbers, type PullHost } from './pulls.ts'
 
-// These moved to `pulls.ts`, where every code host shares them; they stay importable from here under their old names.
-export { pullNumber, pullNumbers as pullsOf, pullOf } from './pulls.ts'
+// `pullOf` moved to `pulls.ts`, where every code host shares it; callers that import it from this module keep working.
+export { pullOf } from './pulls.ts'
 
 const PullSchema = z.looseObject({
   title: z.string().optional(), state: z.string(), html_url: z.string(), user: UserSchema,

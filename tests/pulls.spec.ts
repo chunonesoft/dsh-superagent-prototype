@@ -35,8 +35,6 @@ it('names the latest open pull request of a ticket, else its latest closed one',
   expect(pullOf({})).toBeUndefined()
 })
 
-it('stays importable from the GitHub module under the names it had', () => {
-  expect(github.pullNumber).toBe(pullNumber)
-  expect(github.pullsOf).toBe(pullNumbers)
+it('stays importable from the GitHub module', () => {
   expect(github.pullOf).toBe(pullOf)
 })
