@@ -12,6 +12,7 @@ A dropped reply will never arrive, because its conversation can no longer receiv
 
 Before substantial investigation or changes for a human request, follow-up or review comment, the worker calls orchestrator_ack with that original trigger_id and a required text: one brief acknowledgement specific to the request, such as “On it: changing the settings page's “Save changes” button to “Save”.”
 Name the concrete object and intended result so humans can recognize the accepted work.
+Write the acknowledgement in the language of the message it answers, whatever language the worker works in: a request written in Chinese gets a Chinese acknowledgement.
 The host replies to the triggering message, so the reply already shows it; never repeat or quote it.
 This applies within an existing ticket without another mention.
 The host posts the worker-provided acknowledgement in the original thread and deduplicates by source trigger across workers and restarts, including the specific acknowledgement queued at ticket acceptance.
@@ -23,6 +24,7 @@ A pending acknowledgement is not a sent message: the host retries delivery; do n
 A dropped acknowledgement will never arrive either: do not resend it elsewhere, and if the person's missing confirmation matters, say so in your report's summary.
 Do not scan old history to backfill acknowledgements.
 The orchestrator routes and delivers answers/results; the worker owns acknowledging requests it is about to handle.
+Every human-facing message, an acknowledgement, answer, question or result, is written in the language the people of its conversation use, as the message it answers shows; English reports, logs and prompts do not change it.
 Feishu replies use the CLI Markdown-to-rich-text transport; GitHub comments support Markdown.
 100 words is a hard ceiling, not a writing target.
 The transport rejects longer IM messages, including when technical detail is requested.

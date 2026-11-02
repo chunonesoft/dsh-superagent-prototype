@@ -3,7 +3,8 @@
  * Sources cannot change it: the prompts of both roles, the skills, the resolved deployment with the environment it writes, and what the
  * status script prints. `fixtures/github-prompts.json` holds what that commit produced, with and without Feishu: `observe` below, run
  * unchanged in a checkout of that commit, measured it. A test that fails here means the code changed what a GitHub deployment gets:
- * undo the change, never edit the fixture.
+ * undo the change, never edit the fixture. A change meant for every Source, a GitHub deployment included, is listed in INTENDED instead:
+ * the prompts are hashed with its lines taken out again, so they must equal the fixture but for those lines, and the lines must be there.
  */
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -29,6 +30,16 @@ import { testMachine } from './fixtures/deployment.ts'
 const VARIANTS = ['github', 'github-feishu'] as const
 type Variant = typeof VARIANTS[number]
 const sha = (text: string): string => createHash('sha256').update(text).digest('hex')
+/**
+ * Lines of prompt text added since that commit on purpose, for every Source: each is taken out of the prompts before they are hashed.
+ * The replies guide asks for the language of the conversation, which it did not, so acknowledgements came out in English.
+ */
+const INTENDED: readonly string[] = [
+  'Write the acknowledgement in the language of the message it answers, whatever language the worker works in: a request written in Chinese gets a Chinese acknowledgement.',
+  'Every human-facing message, an acknowledgement, answer, question or result, is written in the language the people of its conversation use, as the message it answers shows; English reports, logs and prompts do not change it.',
+]
+/** The text as that commit had it: without the INTENDED lines, which a prompt holds inside a paragraph, each followed by a space. */
+const upstream = (text: string): string => INTENDED.reduce((result, line) => result.replace(`${line} `, ''), text)
 const GITHUB: GithubAccount = { cli: '/opt/agent/gh-agent', login: 'agent-bot', noreply: '7+agent-bot@users.noreply.github.com' }
 const FEISHU: FeishuBot = { cli: '/opt/agent/lark-bot', appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot', name: 'Widgets Bot' }
 /** The Ticket a worker prompt is assembled for, and the pull request comment that started it. */
@@ -73,11 +84,14 @@ function observePrompts(variant: Variant) {
       const worker = environmentOf({ deployment, sources, settings, ticket: TICKET, trigger: TRIGGER })
       const prompts = new Prompts(store, () => 100_000, () => main, () => feishu)
       const config = prompts.current().config
-      const assemble = (role: 'orchestrator' | 'worker', variables: Variable[]): Assembled => ({
-        sha: sha(prompts.compose(config, role, variables)),
-        parts: Object.fromEntries(promptParts(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(settings, config) : undefined)
-          .map(part => [part.name, sha(part.text)])),
-      })
+      const assemble = (role: 'orchestrator' | 'worker', variables: Variable[]): Assembled => {
+        const whole = prompts.compose(config, role, variables)
+        // Each intended line is in every prompt, once, so taking it out cannot pass for a prompt that lost it.
+        for (const line of INTENDED) expect(whole.split(`${line} `), line).toHaveLength(2)
+        return { sha: sha(upstream(whole)),
+          parts: Object.fromEntries(promptParts(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(settings, config) : undefined)
+            .map(part => [part.name, sha(upstream(part.text))])) }
+      }
       return {
         prompts: { main: assemble('orchestrator', main), worker: assemble('worker', worker) },
         // What Sessions register for each skill: its name under the prefix, the packaged description, and the text a Session reads.
