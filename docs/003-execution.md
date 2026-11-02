@@ -50,7 +50,7 @@ Worker subagents, including nested ones, use DeepSeek Harness's `standard` prese
 
 Before the first Assignment, if the Ticket directory does not exist, the prepare command runs once with `sh` in the execution root. It has ten minutes to finish. Without a prepare command, the worker starts in an empty directory.
 
-A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout. A pull request belongs to the Ticket when its branch's last path segment matches the Ticket's short name.
+A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout. A pull request, or on GitLab a merge request, belongs to the Ticket when its branch's last path segment matches the Ticket's short name.
 
 ### Concurrency
 
@@ -71,11 +71,15 @@ The prepare command and Executor instructions receive the same execution variabl
 | `DSH_SUPERAGENT_GITHUB_REPOSITORY` | GitHub | The repository the Source watches, `owner/name` |
 | `DSH_SUPERAGENT_GITHUB_ACCOUNT`, `DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL` | GitHub | The agent account and its commit email |
 | `DSH_SUPERAGENT_GITHUB_NUMBER`, `DSH_SUPERAGENT_GITHUB_PR_HEAD` | GitHub | The Issue or pull request that started the Ticket, and its head ref when it is a pull request |
+| `DSH_SUPERAGENT_GITLAB_PROJECT` | GitLab | The project the Source watches, `namespace/project` |
+| `DSH_SUPERAGENT_GITLAB_ACCOUNT`, `DSH_SUPERAGENT_GITLAB_COMMIT_EMAIL` | GitLab | The agent account and its commit email |
+| `DSH_SUPERAGENT_GITLAB_IID`, `DSH_SUPERAGENT_GITLAB_MR_HEAD` | GitLab | The Issue or merge request that started the Ticket, by its number in the project, and its head ref when it is a merge request |
 | `DSH_SUPERAGENT_FEISHU_BOT`, `DSH_SUPERAGENT_FEISHU_CHAT` | Feishu | The bot, and the chat that started the Ticket |
+| `DSH_SUPERAGENT_DINGTALK_BOT`, `DSH_SUPERAGENT_DINGTALK_CONVERSATION` | DingTalk | The robot's code, and the conversation that started the Ticket |
 
-Ticket-specific values come from its directory and originating Trigger. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
+Ticket-specific values come from its directory and originating Trigger; a variable about a Source the Ticket did not start on is empty. Other values come from the current deployment settings. An installation works on one code host, so it declares the variables of that host and not of the other: one on GitLab has the GitLab variables and not the GitHub ones. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
 
-Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.
+Workers reach GitHub through the agent account's `gh`, GitLab through its `glab`, Feishu through the bot's `lark-cli` and DingTalk through the robot's `dingtalk-bot`. The shim of a CLI whose Source is not set fails and says so. Blocked commands fail when invoked by name, except the worker commands `gh`, `git`, `glab`, `lark-cli` and `dingtalk-bot`. A save that blocks `gh`, `git` or `lark-cli` is refused. `glab` and `dingtalk-bot` in a stored list are ignored, not refused, because a list saved before those Sources existed may name one: the shim keeps running the agent's CLI, and `DSH_SUPERAGENT_BLOCKED_COMMANDS` leaves the name out.
 
 These wrappers and directories establish defaults, not a security boundary. A worker can still execute a program by absolute path.
 
@@ -87,7 +91,7 @@ By default, the Executor never enables auto-merge as the agent account: GitHub a
 
 The default instructions allow auto-merge only for a pull request opened for the Ticket, when it is ready, the required approvals cover the head commit, and additions plus deletions total fewer than 200 lines. Before pushing another revision, the Executor withdraws auto-merge.
 
-Reviews without a body, such as approvals, also arrive as Triggers and can wake an Executor waiting for review. These instructions govern the agent, not GitHub's merge rules. To enforce approvals, require them in branch protection and dismiss stale approvals. Omit the merge CLI or remove the auto-merge paragraph to require manual merging.
+Reviews without a body, such as approvals, also arrive as Triggers and can wake an Executor waiting for review. These instructions govern the agent, not GitHub's merge rules. To enforce approvals, require them in branch protection and dismiss stale approvals. Omit the merge CLI or remove the auto-merge paragraph to require manual merging. On GitLab the Executor never accepts a merge request, or sets it to merge when its pipeline succeeds, unless Delivery requirements say to, so people merge.
 
 ## How a Ticket ends
 
@@ -95,13 +99,13 @@ Reviews without a body, such as approvals, also arrive as Triggers and can wake 
 - **Nothing to do:** an Executor that finds no work for a person to act on, such as a request that does not reproduce or is superseded, reports `dropped`. The Ticket ends without a message, unless a matched rule asks for one, and a person's later message on its Threads resumes it.
 ### Pull requests
 
-A Ticket follows the pull request it started from once its Executor reports it. It also follows each pull request opened from its branch once reported by the Executor or found by the GitHub Source. Reopened pull requests are followed again.
+On GitLab a merge request is a pull request in every rule below, and a Ticket follows it by its number in the project. A Ticket follows the pull request it started from once its Executor reports it. It also follows each pull request opened from its branch once reported by the Executor or found by the GitHub or GitLab Source. Reopened pull requests are followed again.
 
 The Ticket is done when none of the pull requests it opened remain open. If it opened none, all pull requests it follows must be closed. It then ends with the outcome of the last relevant close and keeps its Subscriptions, allowing a later human comment to resume it.
 
 A close does not end the Ticket while resumed, retried or recovered work is unfinished. It also waits if the Executor acknowledged or answered a follow-up it owns but has not since made a non-progress Report or ended a turn after reading that message. A later `ready` Report ends the Ticket once the same pull-request completion rule is satisfied.
 
-Chat Channels receive one final notice about the pull-request outcome. GitHub already displays the outcome on the pull request itself. Removing a Ticket's Subscription to a pull request also stops it following that pull request.
+Chat Channels receive one final notice about the pull-request outcome. GitHub and GitLab already display the outcome on the pull or merge request itself. Removing a Ticket's Subscription to a pull request also stops it following that pull request.
 
 "Awaiting review" therefore means a `ready` Report with a pull request.
 
@@ -113,7 +117,7 @@ An Input counts as read after the Session takes it into a step and subsequently 
 
 Threads followed only for context still deliver messages, but do not give the Ticket ownership of human follow-ups or resume ended Tickets. Those messages can be assessed independently.
 
-Sources poll subscribed Threads while a live Ticket subscribes, and for two weeks after the later of the last Trigger and the subscribing Tickets' end. Afterwards, messages arrive only through ordinary intake: GitHub notifications or Feishu live events.
+Sources poll subscribed Threads while a live Ticket subscribes, and for two weeks after the later of the last Trigger and the subscribing Tickets' end. Afterwards, messages arrive only through ordinary intake: GitHub notifications, GitLab Todos, or Feishu or DingTalk live events. A DingTalk robot cannot read a chat, so its messages always arrive as live events.
 
 ## Failure and recovery
 
@@ -169,9 +173,13 @@ A notified Issue or pull request whose reads keep failing is dropped a day after
 
 Its read position stays where it was, so a later notification or a poll of its Thread reads what the failed reads missed.
 
+The GitLab Source reads each Issue and merge request on its own in the same way, and reports an error after as many failed polls in a row as its **Failed polls before reporting an error** setting says, three by default. GitLab answers 404 also when the agent lost access to a private project, so a 404 is retried. An answer of 410 means the Issue or merge request was deleted: it no longer fails the poll, its Thread keeps the error, and the Source's state names it. Its read position in the Todos stays where it was while a read of a Thread fails, so the next poll reads what the failed one missed.
+
 The Feishu event consumer reports every failure, and polling of subscribed topics keeps each failure on its Thread.
 
-A malformed item in a GitHub list or a Feishu page is skipped, and the Source's state counts it.
+The DingTalk event consumer, the `dingtalk-bot event consume` process, reports every failure and is started again after a delay that grows from one second to one minute. The robot reads no history, so a message sent while the consumer or dsh-superagent was down is lost.
+
+A malformed item in a GitHub or GitLab list or a Feishu page is skipped, and the Source's state counts it.
 ### Channel failure
 
 Outgoing messages are stored and sent as stored work, retried with backoff from 5 seconds, doubling up to 300.
@@ -184,7 +192,9 @@ A message with failed attempts is a system problem until it goes out or is withd
 
 A message is dropped only when its Source no longer listens to the conversation, or when the Source answers that the conversation can never receive it; while its Source is off, it waits.
 
-The Sources answer that for a deleted Issue or a locked conversation on GitHub, and for a recalled message or one Feishu no longer finds on Feishu.
+The Sources answer that for a deleted Issue or a locked conversation on GitHub, for a deleted Issue or merge request on GitLab, for a recalled message or one Feishu no longer finds on Feishu, and, on DingTalk, when the robot API refuses a send because the conversation ID is invalid, or the robot has left the conversation or the group is gone. Any other refusal is retried.
+
+A DingTalk reply goes through the session webhook of the message it answers while the webhook lives, which is about 90 minutes, and mentions the sender in a group. Once it has expired, or when it fails, the robot API sends the reply instead, and it cannot mention anyone. Neither path has an idempotency key, so a send whose answer was lost may be sent twice, whereas a GitHub or GitLab reply carries a hidden marker that prevents it and Feishu accepts an idempotency key.
 
 A reply to a review comment that no longer exists goes to the pull request's conversation instead.
 

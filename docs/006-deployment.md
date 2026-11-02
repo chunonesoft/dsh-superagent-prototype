@@ -5,8 +5,8 @@ Use this guide to install, configure and operate dsh-superagent. It covers accou
 ## What runs
 
 - **A dedicated DeepSeek Harness profile**, called `superagent` in this guide. Create it from the Web profile template. It loads the bundle and serves its panel on `127.0.0.1`. Keep it separate from the profile you work in: the plugin changes process-wide `PATH` and git settings, and its process needs independent restarts and upgrades.
-- **An agent GitHub account.** The agent comments, pushes branches and opens pull requests as this account, through a GitHub CLI signed in only as that account.
-- **Optional:** a Feishu bot for chat requests.
+- **An agent account on the code host.** The agent comments, pushes branches and opens pull requests, or merge requests on GitLab, as this account, through a CLI signed in only as that account: the GitHub CLI for a github.com repository, or `glab` for a project on a self-hosted GitLab. An installation works on one code host, never both.
+- **Optional:** a Feishu bot or a DingTalk robot for chat requests.
 
 Plugin configuration holds the state directory and machine limits. Use the panel for everything else: Sources for the repository and accounts, Policy for allowed lists, and Execution for worker directories and commands.
 
@@ -16,17 +16,43 @@ The bundle defines `dsh-superagent-worker` for Executors and `dsh-superagent-rou
 
 Opening a blank managed Session in the Web UI can select the profile's default preset. dsh-superagent restores its role-specific preset before the first turn.
 
-Both presets run with `danger-full-access` as the operator's OS user and read messages from subscribed Threads. Account wrappers choose the agent's credentials by default; they do not isolate the process. A worker can execute programs by path and read the operator's home directory. For isolation, use a dedicated OS account containing only the agent's credentials.
+Both presets run with `danger-full-access` as the operator's OS user and read messages from subscribed Threads. Account wrappers choose the agent's credentials by default; they do not isolate the process. A worker can execute programs by path and read the operator's home directory. For isolation, use a dedicated OS account containing only the agent's credentials. A machine that holds production CLIs, such as ones signed in to production systems, must run dsh-superagent under such a dedicated account: the wrappers and shims choose the agent's CLIs by default, but do not hide the others from a worker, which can run them by absolute path.
+
+## Choose the Sources
+
+An installation works on at most one code host, GitHub or a self-hosted GitLab, and on any of the chat Sources, Feishu and DingTalk. Set the Source of each one you use, and leave the others without a value; a Source counts as set once one of its account fields has a value.
+
+| Source | Receives | Replies with | Needs |
+| --- | --- | --- | --- |
+| GitHub | The agent account's notifications, subscribed Issues and pull requests, and, where switched on, every new Issue, pull request and comment of the repository and the default branch's CI | Comments and review thread replies | A GitHub user with write access to a github.com repository, and `gh` signed in as it |
+| GitLab | The agent account's Todos in the project, subscribed Issues and merge requests, and, where switched on, every new Issue, merge request and note of the project and the default branch's pipeline | Notes on the Issue or merge request | A GitLab user with the Developer role in the project, and `glab` signed in as it |
+| Feishu | The messages of the listed chats and direct messages, with history recovery and polling of subscribed topics | Topic replies | A Feishu bot, and `lark-cli` configured as it |
+| DingTalk | The messages that mention the robot in the listed chats, and direct messages | Replies in the chat | A DingTalk robot, and `dingtalk-bot` configured as it |
+
+- **One code host.** Set the GitHub Source or the GitLab Source, not both. An installation works on one repository, and a save that leaves both set is refused. On GitLab the GitHub plugin has nothing to do: disable the `dsh-superagent-github` entry of the profile (see Machine configuration), or leave it on and its Source reports that it names no account.
+- **Chat Sources alone.** An installation without a code host works on the clone its prepare command names, for investigations and other work that needs no pull request. It has no code host account, so a report cannot bind a pull request or a merge request, and git has no credential helper of its own: it reaches a remote with the credentials of the OS account that runs dsh-superagent, a `.netrc` entry for HTTPS or an SSH key. Give that account only the access a Ticket needs, and see Permissions and isolation.
+- **A chat Source that fails** leaves out only itself while another Source works. When it is the only one, setup stops.
+
+### Platform limits
+
+- **DingTalk reads no history.** In a group the robot receives only the messages that mention it, and it cannot read a chat's history or a person's profile. A message sent while dsh-superagent or the event consumer is down is lost.
+- **DingTalk lists cannot be synced.** The robot cannot list a chat's members, so the allowed list is typed in by staffId, which DingTalk's admin console calls a member's user ID. A message from someone not on the list makes no Ticket: Eval records it as ignored, because its sender is not on the list. The panel names that sender only as a DingTalk user; the staffId is the `actor.id` of the message in the Management API, in `GET sources` for a message the Source set aside and in the timeline of `GET threads/<key>` otherwise. Someone outside the organization has no staffId and cannot be listed.
+- **DingTalk replies.** A session webhook lives about 90 minutes. While it lives, a reply goes through it and mentions the sender in a group; after that, replies go through the robot API and cannot mention the sender. Neither path has an idempotency key, so a send whose answer was lost may repeat. DingTalk names no page for a message, so the panel links to none.
+- **DingTalk and a conversation that is gone.** A send to an invalid conversation ID is dropped; DingTalk's words for that refusal were measured. The words for a robot removed from a group, or a group dissolved, are expected and have not been measured: if DingTalk words them differently, a reply to such a group is retried like any failed send, and shows among the system problems until the Source no longer listens to that chat.
+- **GitLab.** The Source was exercised against GitLab CE 11.7. It uses only `glab api`, over the v4 REST API, and no higher-level command such as `glab mr`, which fails on old instances. The CI result of a merge request is not delivered as a Trigger; the Executor reads it on demand, and only the default branch's pipeline arrives, where switched on.
 
 ## Prerequisites
 
 - Node.js 22.19+ or 24+, pnpm, git 2.32+, Python 3.8+ and tmux
-- GitHub CLI (`gh`) 2.48 or later. Source CLI fields must point to `gh` or `lark-cli` wrappers; the host relies on their subcommands and output formats.
-- A repository on github.com; GitHub Enterprise Server is not supported. To create a checkout per Ticket, keep a local clone from which the prepare command can add worktrees. Install `git-lfs` if that repository uses Git LFS.
+- For GitHub, the GitHub CLI (`gh`) 2.48 or later; for GitLab, the GitLab CLI (`glab`), of which the host uses only `glab api`. Source CLI fields must point to `gh`, `glab`, `lark-cli` or `dingtalk-bot` wrappers; the host relies on their subcommands and output formats.
+- A repository on github.com (GitHub Enterprise Server is not supported) or a project on a self-hosted GitLab, one of the two; see Choose the Sources. To create a checkout per Ticket, keep a local clone from which the prepare command can add worktrees. Install `git-lfs` if that repository uses Git LFS.
 - A model provider configured for DeepSeek Harness. dsh-superagent uses the profile's default model unless the Eval or Execution settings name another.
 - For Feishu: `lark-cli` (tested with 1.0.90) and a Feishu or Lark app with a bot
+- For DingTalk: an enterprise internal app with a robot. Its CLI, `dingtalk-bot`, ships in `bin/` of this repository, is built by `pnpm build`, and needs only Node and a direct connection to DingTalk: it reads no proxy variable.
 
 ## Accounts
+
+Create the account of the code host you chose, and the bot of each chat Source. The wrappers below run with the service's `PATH`, which can differ from a login shell's: where in doubt, write absolute paths.
 
 ### Agent GitHub account
 
@@ -45,6 +71,29 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
    ```
 
    Sign in as the agent account; the last command prints its login. dsh-superagent reads the login the same way.
+
+### Agent GitLab account
+
+1. Create a GitLab user for the agent and add it to the project as a Developer or higher, so that it can push branches and open merge requests. The instance must report an email address for it: setup fails without one.
+2. Create a personal access token for the account with the `api` scope. That is all the Source needs, and an old GitLab has no narrower scopes to offer.
+3. Give it a GitLab CLI that uses only its own credentials:
+
+   ```sh
+   mkdir -p ~/.local/bin
+   cat > ~/.local/bin/glab-agent <<'EOF'
+   #!/bin/sh
+   export GITLAB_HOST="https://git.example.com"
+   export GLAB_CONFIG_DIR="$HOME/.config/glab-agent"
+   exec glab "$@"
+   EOF
+   chmod +x ~/.local/bin/glab-agent
+   glab-agent auth login --hostname git.example.com
+   glab-agent api user
+   ```
+
+   `GITLAB_HOST` names the instance, with its scheme: write `http://…` for one served without TLS, and pass `--api-protocol http --git-protocol http` to `auth login` then. `GLAB_CONFIG_DIR` keeps the agent's sign-in apart from any other `glab` configuration. Sign in as the agent account with its token; the last command prints its account, whose `username` dsh-superagent reads the same way. The host and the workers use only `glab api`.
+
+   If the machine reaches the network through a proxy that cannot reach an instance on a private address, make `glab` connect directly: put `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy` before the `exec` line. Git reads the same variables from the environment dsh-superagent starts in, so list the instance's host in `NO_PROXY` there.
 
 ### Feishu bot (optional)
 
@@ -68,6 +117,27 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
 
    Both configurations share the keychain entry for the app secret. To remove only the bot configuration, delete its directory; do not run `lark-cli config remove`, which would affect the shared secret.
 
+### DingTalk robot (optional)
+
+1. In the DingTalk developer console create an enterprise internal app with a robot, and choose Stream mode to receive its messages: the Source then needs no public address. Grant the app the permission to send messages as a robot, publish the app version, and add the robot to each chat that should reach it.
+2. Give the robot its own `dingtalk-bot` configuration and a wrapper:
+
+   ```sh
+   mkdir -p ~/.local/bin
+   cat > ~/.local/bin/dingtalk-bot-agent <<'EOF'
+   #!/bin/sh
+   export DINGTALK_BOT_CONFIG_DIR="$HOME/.config/dingtalk-bot-agent"
+   exec /home/me/dsh-superagent/bin/dingtalk-bot "$@"
+   EOF
+   chmod +x ~/.local/bin/dingtalk-bot-agent
+   dingtalk-bot-agent config init --client-id <client id> --client-secret-stdin
+   dingtalk-bot-agent auth status
+   ```
+
+   `config init` reads the app's client secret from standard input and writes it to `config.json` in the configuration directory, with mode 600. That file is the only place the secret rests: the settings never hold it, and the CLI prints neither it nor a token. The robot code defaults to the client ID, which is the robot code of an enterprise internal robot; pass `--robot-code` when it differs. `auth status` prints the app and the robot once DingTalk gives a token, which is what setup checks.
+
+   `bin/dingtalk-bot` is the CLI of this repository, built by `pnpm build`.
+
 ## Install
 
 Run this block once, on a machine that has no `superagent` profile yet:
@@ -88,7 +158,7 @@ Run the profile-creation command only for a new installation. If the profile alr
 
 ## Machine configuration
 
-Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, also enable the `dsh-superagent-feishu` entry there. The `webserver` entry sets the panel's port.
+Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, GitLab or DingTalk, also enable the `dsh-superagent-feishu`, `dsh-superagent-gitlab` or `dsh-superagent-dingtalk` entry there; for GitLab, also disable `dsh-superagent-github`. The example file shows each entry. The `webserver` entry sets the panel's port.
 
 | Key | Required | Meaning |
 | --- | --- | --- |
@@ -119,9 +189,9 @@ scripts/dsh-superagent status
 | 2 | It runs, but a part other than the runtime, such as a Source or a Policy sync (`sync:<source id>`), reports an error; a restart does not fix it |
 | 3 | It runs and waits for setup; a restart does not fix it |
 
-A Source that is still starting counts as normal operation. So does a Feishu bot that setup could not check.
+A Source that is still starting counts as normal operation. So does a Feishu bot or a DingTalk robot that setup could not check, while another Source works.
 
-`status` returns failed parts and their details under `errors`, and setup requirements under `setup`. `start` and `restart` print those problems as lines; they exit 1 if the service never comes up. Only an intentional `stop` pauses automatic recovery.
+`status` returns failed parts and their details under `errors`, and setup requirements under `setup`. The problem of a chat bot that setup could not check shows under `feishu` or `dingtalk`. `start` and `restart` print those problems as lines; they exit 1 if the service never comes up. Only an intentional `stop` pauses automatic recovery.
 
 Each profile stores logs and control files under `.artifacts/`:
 
@@ -144,17 +214,26 @@ Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` i
 
 Setup must succeed before polling or work starts. Overview lists missing requirements and links to their settings. A settings change runs setup again. If you fix something outside the application, such as CLI authentication, choose **Check again**.
 
-1. **Sources.** Set the GitHub repository (`owner/name`) and agent CLI, for example `/home/me/.local/bin/gh-agent`. Requests normally arrive through the agent account's notifications. A new Issue or comment mentioning the account arrives on the next poll; adding a mention by editing an existing Issue body does not. Post a new comment instead. For Feishu, set the bot CLI, chats, each chat's receive-all or mentions-only mode, and whether to receive direct messages.
-2. **Policy.** The two example rules can be edited or removed. Under **On each Source**, add the GitHub accounts and Feishu users who may ask for work; until a list has someone, no request can become a Ticket. With Feishu, a chat can be chosen to sync the list from, at startup and on **Sync now**.
-3. **Execution.** The directory root and a prepare command. To give each Ticket a checkout of the repository:
+1. **Sources.** Set the GitHub repository (`owner/name`) and agent CLI, for example `/home/me/.local/bin/gh-agent`, or the GitLab project (`namespace/project`, with any subgroups) and agent CLI, for example `/home/me/.local/bin/glab-agent`, and leave the other code host empty. Requests normally arrive through the agent account's notifications on GitHub, and as its Todos on GitLab, which GitLab creates when the account is mentioned or assigned. A new Issue or comment mentioning the account arrives on the next poll; adding a mention by editing an existing Issue body or merge request description does not. Post a new comment instead. For Feishu, set the bot CLI, chats, each chat's receive-all or mentions-only mode, and whether to receive direct messages. For DingTalk, set the bot CLI, the chats, whether to receive direct messages, and whether to take mentions in other chats the robot has joined; the robot receives only the messages that mention it, so a chat has no receive-all mode, and the card offers a chat's id once the robot has received a message there.
+2. **Policy.** The two example rules can be edited or removed. Under **On each Source**, add the GitHub accounts, GitLab usernames, Feishu users and DingTalk staffIds who may ask for work; until a list has someone, no request can become a Ticket. With Feishu, a chat can be chosen to sync the list from, at startup and on **Sync now**. A DingTalk list cannot be synced: type the staffIds in (see Platform limits for where to find one).
+3. **Execution.** The directory root and a prepare command. To give each Ticket a checkout of the repository, on GitHub:
 
    ```sh
    git -C /home/me/src/widgets fetch --no-tags "https://github.com/$DSH_SUPERAGENT_GITHUB_REPOSITORY.git" "${DSH_SUPERAGENT_GITHUB_PR_HEAD:-HEAD}:refs/dsh-superagent/$DSH_SUPERAGENT_TICKET" &&
    git -C /home/me/src/widgets worktree add -b "agent/$DSH_SUPERAGENT_NAME" "$DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$DSH_SUPERAGENT_TICKET"
    ```
 
-   List personal CLIs, such as one signed in to your own account, as blocked commands.
-4. **Prompts.** Set the team sections: the GitHub disclosure line, review bots, the commit author and the auto-merge condition.
+   On GitLab, fetch from the clone's own `origin`: the agent's git configuration answers a request for the instance with the agent account and rewrites an SSH address of the instance to its HTTP(S) address, so the fetch does not use your SSH keys.
+
+   ```sh
+   git -C /home/me/src/widgets fetch --no-tags origin "${DSH_SUPERAGENT_GITLAB_MR_HEAD:-HEAD}:refs/dsh-superagent/$DSH_SUPERAGENT_TICKET" &&
+   git -C /home/me/src/widgets worktree add -b "agent/$DSH_SUPERAGENT_NAME" "$DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$DSH_SUPERAGENT_TICKET"
+   ```
+
+   With chat Sources alone no repository variable has a value, so the command names the clone itself.
+
+   List personal CLIs, such as one signed in to your own account, as blocked commands. The agent's own `gh`, `glab`, `lark-cli`, `dingtalk-bot` and `git` need no entry and cannot be blocked.
+4. **Prompts.** Set the team sections: the disclosure line, review bots, the commit author and the auto-merge condition.
 
 ### Management API
 
@@ -168,8 +247,8 @@ Agents may rely on these routes and fields. The other routes in `src/app/api.ts`
 
 | Request | Answer |
 | --- | --- |
-| `GET state` | What every page reads: `setup`, with `problem` and `feishuProblem`, each `null` or a setup problem with `place`, `code`, `values` and `detail`, and `accounts` once setup resolved them; `health`, an entry per part, below, with `state` (`starting`, `ready`, `paused` or `error`), `detail` and `at`; `load`, the Executor Sessions `running`, the Tickets `queued` and `maxWorkers`; `paused`; and `masterId` |
-| `GET settings` | `blocks`: `policy`, `eval` and `executor`, each with its `value` and its `revision`; `sources`: the Source instances, each with `id`, `kind`, `installed`, its block's `value`, `{"enabled": …, "config": {…}}`, and `revision`, its kind's form, and its setup `problem` when it has one; `policyVersion`; and `environment`, the execution environment's `root` and `variables` |
+| `GET state` | What every page reads: `setup`, with `problem` and `feishuProblem`, each `null` or a setup problem with `place`, `code`, `values` and `detail`, `dingtalkProblem`, present only when the DingTalk check failed, and `accounts` once setup resolved them, with the code host's `repository` and `agent` when there is one, `feishu`, and `dingtalk` when set; `health`, an entry per part, below, with `state` (`starting`, `ready`, `paused` or `error`), `detail` and `at`; `load`, the Executor Sessions `running`, the Tickets `queued` and `maxWorkers`; `paused`; and `masterId` |
+| `GET settings` | `blocks`: `policy`, `eval` and `executor`, each with its `value` and its `revision`; `sources`: the Source instances, each with `id`, `kind`, `installed`, its block's `value`, `{"enabled": …, "config": {…}}`, and `revision`, its kind's form, the display `labels` of its rows' ids, such as the names of DingTalk chats, and its setup `problem` when it has one; `policyVersion`; and `environment`, the execution environment's `root` and `variables` |
 | `GET sources` | Each Source's status: `state` (`missing`, `off`, `error`, `setup`, `starting`, `paused` or `ready`), the `health` of its parts, its setup `problem`, the last day's `stats`, the Triggers it `filtered` in that day, and the messages it `dropped` in that day, newest drop first, each with its `channel`, `preview`, `ticket` (`id` and `title`) when it was for one, its `thread` when the store has it, and `dropped.at` and `dropped.reason`, `channelGone` or `channelIgnored` |
 | `PUT settings/<block>` with `{"value": …, "revision": n}` | Saves one block: `saved`, the block's new `revision`, `policy_changed` and `restarting`. `value` is the whole block, as `GET settings` holds it; a missing key takes its default |
 | `POST executor/pause` with `{"paused": true}` or `false` | Pauses or resumes processing: `paused` |
@@ -187,7 +266,7 @@ Health entries are grouped by responsibility:
 | `evals` | Unavailable Evals from the last hour with no later judgement or dismissal |
 | `assessment`, `launch`, `delivery`, `relay`, `notice`, `reply` | Stored work described in [003 Execution](003-execution.md); delivery counts waiting work, while reply covers Channel messages |
 | `worker` | Executor Session event handling; appears after its first failure |
-| `github`, `feishu`, `history` | Source polling, events and history recovery |
+| `github`, `gitlab`, `feishu`, `dingtalk`, `history` | Source polling and events, and Feishu's history recovery |
 | `sync:<source id>` | Allowed-list synchronization |
 
 A refusal has a status and `error`, its English text:
@@ -199,8 +278,8 @@ A refusal has a status and `error`, its English text:
 
 The blocks:
 
-- `source:github`, `source:feishu`: `{"enabled": true, "config": {…}}`. GitHub's config has `repository` and `cli`, and the switches `observeIssues`, `observePulls`, `observeComments` and `observeCi`, off by default, which receive every new Issue, new pull request and comment in the repository and the default branch's CI; Feishu's has `cli`, `chats` as `[{"chatId": "oc_…", "name": "…", "listen": "mentions"}]` (or `"all"`), `directMessages`, and `otherChats` as `"none"` or `"mentions"`.
-- `policy`: `{"rules": […], "sources": {"github": {"allowed": [{"id": "<login>"}], "bots": [{"id": "dependabot[bot]"}]}, "feishu": {"allowed": [{"id": "ou_…", "name": "…"}], "syncChat": "oc_…", "admission": {"oc_…": {"unlistedAddressed": "explicit"}}}}}`. `bots` lists the bots whose messages may become inferred candidates. An `admission` row is keyed by chat id, `other` or `direct` for Feishu, and by `issues`, `pulls`, `comments` or `ci` for GitHub; an unset cell takes its default (see [002 Authorization](002-authorization.md)).
+- `source:github`, `source:gitlab`, `source:feishu`, `source:dingtalk`: `{"enabled": true, "config": {…}}`. GitHub's config has `repository` and `cli`, and the switches `observeIssues`, `observePulls`, `observeComments` and `observeCi`, off by default, which receive every new Issue, new pull request and comment in the repository and the default branch's CI; GitLab's has `project` and `cli`, `pollSeconds`, `failuresBeforeError`, and the switches `observeIssues`, `observeMergeRequests`, `observeNotes` and `observePipelines`, off by default, which receive every new Issue, new merge request and note in the project and the default branch's pipeline; Feishu's has `cli`, `chats` as `[{"chatId": "oc_…", "name": "…", "listen": "mentions"}]` (or `"all"`), `directMessages`, and `otherChats` as `"none"` or `"mentions"`; DingTalk's has `cli`, `chats` as `[{"chatId": "cid…", "name": "…"}]`, `directMessages`, and `otherChats` as `"none"` or `"mentions"`.
+- `policy`: `{"rules": […], "sources": {"github": {"allowed": [{"id": "<login>"}], "bots": [{"id": "dependabot[bot]"}]}, "gitlab": {"allowed": [{"id": "<username>"}]}, "feishu": {"allowed": [{"id": "ou_…", "name": "…"}], "syncChat": "oc_…", "admission": {"oc_…": {"unlistedAddressed": "explicit"}}}, "dingtalk": {"allowed": [{"id": "<staffId>", "name": "…"}]}}}`. `bots` lists the bots whose messages may become inferred candidates; GitLab and DingTalk have none. An `admission` row is keyed by chat id, `other` or `direct` for Feishu and DingTalk, by `issues`, `pulls`, `comments` or `ci` for GitHub, and by `issues`, `mergeRequests`, `notes` or `pipelines` for GitLab; an unset cell takes its default (see [002 Authorization](002-authorization.md)).
 - `eval`: `mode`, `timeoutSeconds` and `model`.
 - `executor`: `model`, `maxWorkers`, `directory`, `prepare` and `blockedCommands`. The processing pause is a setting of its own, `paused`, which `POST executor/pause` sets.
 
@@ -213,22 +292,28 @@ curl -s -X PUT -H 'x-orchestrator-request: 1' -H 'content-type: application/json
   -d "{\"value\": {\"enabled\": true, \"config\": {\"repository\": \"acme/widgets\", \"cli\": \"$HOME/.local/bin/gh-agent\"}}, \"revision\": $rev}"
 ```
 
+A GitLab installation saves `source:gitlab` the same way, with `{"project": "acme/widgets", "cli": "$HOME/.local/bin/glab-agent"}` as its config.
+
 ## Setup checks
 
 Setup uses the DeepSeek Harness subprocess service, as worker shells do. It removes environment variables whose names contain KEY, PASSWORD, SECRET or TOKEN.
 
-Setup verifies the GitHub repository and the agent's push access, writes the worker environment, and checks that git uses only the agent credentials for github.com. A Feishu setup failure disables only the Feishu Source.
+Setup verifies the account of each Source that is set. For GitHub that is the repository and the agent's push access. For GitLab it is the agent account, read with `glab api user`, which must report an email address, and the project, read with `glab api projects/<project>`, where the account needs the Developer role in the project or its group; the project's `web_url` gives the instance's origin. For Feishu it is the bot. For DingTalk it is that `dingtalk-bot auth status` reports the app and the robot and got a token. Setup then writes the worker environment, and checks that git reads the configuration it writes: the credential helper for github.com, or for the GitLab instance's origin. A Feishu or DingTalk setup failure disables only that Source while another Source works; a code host that fails stops setup.
 
 The process environment that setup writes:
 
-- **Command shims** in `<stateDir>/worker-bin`, first on `PATH`: `gh` runs the agent's CLI; `lark-cli` runs the bot's CLI; blocked commands fail. A shim removes its own directory from `PATH` before it runs its target.
-- **git configuration** in `<stateDir>/worker-gitconfig`: replaces the operator's global and system git configuration. It selects the agent CLI as the github.com credential helper, rewrites GitHub SSH addresses to HTTPS and defines Git LFS filters. Personal git settings such as an HTTP proxy do not apply. No commit identity is set here, git never prompts for credentials, and `GH_TOKEN` and `GITHUB_TOKEN` are removed.
+- **Command shims** in `<stateDir>/worker-bin`, first on `PATH`: `gh` runs the agent's GitHub CLI, `glab` its GitLab CLI, `lark-cli` the bot's CLI and `dingtalk-bot` the robot's; blocked commands fail. The shim of a CLI whose Source is not set fails and says so. These five names cannot be blocked, and an entry of `glab` or `dingtalk-bot` in the blocked commands, which an older list may hold, is ignored. A shim removes its own directory from `PATH` before it runs its target.
+- **git configuration** in `<stateDir>/worker-gitconfig`: replaces the operator's global and system git configuration. With a GitHub account it selects the agent CLI as the github.com credential helper and rewrites the GitHub SSH addresses `git@github.com:` and `ssh://git@github.com/` to HTTPS. With a GitLab account it selects the agent's `glab` as the credential helper for the instance's origin, and rewrites the instance's SSH addresses `git@<host>:` and `ssh://git@<host>/` to its HTTP(S) root, so a clone in either form uses the agent account and not the operator's SSH keys. It defines Git LFS filters. Personal git settings such as an HTTP proxy do not apply. No commit identity is set here, git never prompts for credentials, and `GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`, `GITLAB_ACCESS_TOKEN` and `OAUTH_TOKEN` are removed.
+
+  Only those spellings are rewritten. An SSH address with a port, such as `ssh://git@git.example.com:2222/…`, is left as it is, and git then uses the operator's SSH keys for it: clone and fetch over HTTP(S), or in one of the two forms above.
+
+  With no GitHub account the file instead sends the usual github.com addresses, `https://github.com/`, `git@github.com:` and `ssh://git@github.com/`, to `github.invalid` when they are pushed to, so a worker's git cannot push there by accident with the operator's credentials. Fetching is unchanged. This guards the usual spellings and is no boundary: a remote that sets an explicit `pushurl`, and any other spelling of the address, such as one with a port or another user, are not stopped. Isolation takes a dedicated OS account.
 
 A file in `worker-bin` or `worker-gitconfig` that dsh-superagent did not write stops setup. A Ticket directory inside a git repository whose own configuration adds credentials fails the Ticket.
 
 ## Try it
 
-From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu, mention the bot in a configured chat.
+From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`; on GitLab, do the same in an Issue or merge request of the project. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu or DingTalk, mention the bot or the robot in a configured chat.
 
 ## Upgrade
 
@@ -254,15 +339,27 @@ Setup problems appear on the overview with a link to the fix, in the panel's lan
 | `The agent GitHub CLI is not set.` | Set the agent's CLI on the GitHub card |
 | `The agent GitHub CLI was not found.` | Set the wrapper's absolute path, or a command name on `PATH` |
 | `The agent GitHub CLI cannot read its account` | Sign the wrapper in with `auth login` |
-| `@… cannot read …` or `@… cannot push to …` | Give the agent account write access to the repository |
+| `@… cannot read …` or `@… cannot push to …` | Give the agent account write access to the repository; on GitLab, the Developer role in the project or its group. For `cannot read`, also check the path of the repository or project |
 | `The GitHub Source names no repository.` | Set the repository, `owner/name`, on the GitHub card |
+| `The GitLab Source names no project.` | Set the project, `namespace/project`, on the GitLab card |
+| `The agent GitLab CLI is not set.` | Set the agent's CLI on the GitLab card |
+| `The agent GitLab CLI was not found.` | Set the wrapper's absolute path, or a command name on `PATH` |
+| `The agent GitLab CLI cannot read its account` | Sign the wrapper in with `auth login` and a token with the `api` scope; the instance must also report an email address for the account |
+| `Set the GitHub or the GitLab Source, not both: one installation works on one repository.` | Empty the repository and CLI of the GitHub Source, or the project and CLI of the GitLab Source |
+| `Saving this would leave no Source set; an installation needs at least one.` | Set another Source first, then clear this one |
 | A Ticket fails with `The prepare command failed: …` | The output names the cause, such as a wrong clone path; fix the command, then retry the Ticket |
-| `git does not read the github.com credential configuration dsh-superagent writes` | Install git 2.32 or later |
+| `git does not read the github.com credential configuration dsh-superagent writes`, or the same without `github.com` | Install git 2.32 or later |
 | A Ticket fails with `The git configuration of the repository in … sets …` | Remove the named credential or `http.*.extraheader` settings from the clone's `.git/config` |
 | `… was not written by dsh-superagent` | Move the named file out of `<stateDir>/worker-bin` or `<stateDir>/worker-gitconfig`, or choose another `stateDir` |
+| A clone over SSH on a custom port uses the operator's SSH keys, or fails | Only `git@<host>:` and `ssh://git@<host>/` are rewritten to the agent account; clone over HTTP(S) or in one of those forms |
+| A push fails with `Could not resolve host: github.invalid` | The installation has no GitHub account, so a push to the usual github.com addresses is sent there on purpose; push to the code host the installation works on |
 | `The bot lark-cli allows user identities` | Point the Feishu Source at a bot-only configuration, as in Feishu bot above |
 | `The bot lark-cli does not work.` or `The bot identity of app … is …` | Check the configuration's app id and secret |
 | `The Feishu bot is not a member of the chat.` | Add the bot to the chat in the chat's settings; the next attempt succeeds |
+| `The bot dingtalk-bot does not work.` with the CLI's own words after it | The words say why: the CLI was not found (set its absolute path on the DingTalk card), has no configuration (run `config init`, as in DingTalk robot above), or DingTalk refused the credentials (check the client ID and secret) |
+| `auth status of the bot dingtalk-bot did not report the app and robot.` | The program is not `dingtalk-bot`, or is an older one; point the DingTalk Source at `bin/dingtalk-bot` of this repository or a wrapper of it |
+| `The Source names no account`, a Source paused | The Source is on, but the installation has no account for it: set its account, or turn the Source off or disable its plugin entry. The GitHub Source shows this on a GitLab installation |
+| `The Source is on, and its bot dingtalk-bot is not set` | Set the robot's CLI on the DingTalk card |
 | `status` exits 2 | A part reports an error, which a restart does not fix: `errors` names each part, as listed under Management API, with its detail; each part clears its own entry once it works again |
 | `status` exits 3 | Setup waits: `setup` says what is missing, and the overview links to the setting that fixes it |
 | `status` exits 1 | The service does not run, runs twice, does not answer, or its runtime reports an error; the output and the newest log say which |
@@ -271,4 +368,7 @@ Setup problems appear on the overview with a link to the fix, in the panel's lan
 | `dsh-superagent configuration has keys it does not use` (log) | Remove the named keys; the message says where each value lives now |
 | The log says the plugin is incompatible with the running dsh | Install a DeepSeek Harness version within the `engines.dsh` range |
 | The panel shows "Failed to load plugins" after a DeepSeek Harness upgrade | Restart the running instance |
-| Nothing happens after a mention | Check that the author is on the Source's allowed list, the Source is on, and processing is not paused. On GitHub, a mention added by editing an Issue's body is not received; mention the agent in a comment |
+| Nothing happens after a mention | Check that the author is on the Source's allowed list, the Source is on, and processing is not paused. On GitHub and GitLab, a mention added by editing the body of an Issue, or the description of a merge request, is not received; mention the agent in a comment or note |
+| A DingTalk message does nothing | In a group the robot hears only a message that mentions it. The chat must be listed, or **Other chats** must take mentions, and the sender's staffId must be on the allowed list: a message from anyone else makes no Ticket, and Eval records it as ignored because its sender is not on the list |
+| A DingTalk reply does not mention the sender | A session webhook lives about 90 minutes; a later reply goes through the robot API, which cannot mention anyone |
+| A reply to a DingTalk group keeps failing | The robot may have been removed from the group, or the group dissolved, and DingTalk worded the refusal in a way the Source does not know. Stop receiving the chat, by removing it from the Source's chats and setting **Other chats** to not received, and the reply is dropped |
