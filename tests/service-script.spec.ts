@@ -232,3 +232,14 @@ it('does not signal a process that took the recorded service PID, and keeps a st
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
   expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(true)
 }, 20_000)
+it('reads process lists holding bytes that are not UTF-8', async () => {
+  const url = await answering(READY, true)
+  const pid = sleeper(), other = sleeper()
+  processes(service(pid))
+  const normal = await run('status', '--url', url)
+  // Another process's command line ends in the bytes \xff\xfe, which UTF-8 cannot decode.
+  writeFileSync(join(root, 'ps.txt'), Buffer.from(`${service(pid)}\n${other} sleep /opt/\xff\xfe\n`, 'latin1'))
+  const checked = await run('status', '--url', url)
+  expect(checked.stderr).not.toContain('UnicodeDecodeError')
+  expect(checked.code).toBe(normal.code)
+}, 20_000)
