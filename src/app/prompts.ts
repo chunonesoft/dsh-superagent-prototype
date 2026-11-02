@@ -153,10 +153,12 @@ export class Prompts {
   }
   /**
    * Returns skills to register in every Session: built-in Source skills (`feishu` and `dingtalk` only when their bot is configured, and
-   * `gitlab` in place of `github` when the installation works on GitLab) followed by team skills.
+   * `gitlab` in place of `github` when the installation works on GitLab) followed by team skills. A team skill saved before a built-in
+   * skill took its name is left out rather than registered with the built-in text.
    */
   skills(config: PromptConfig): [string, string][] {
-    return [...this.feishu() ? ['feishu'] : [], ...this.dingtalk() ? ['dingtalk'] : [], this.gitlab() ? 'gitlab' : 'github', ...Object.keys(config.skills)]
+    const team = Object.keys(config.skills).filter(name => !(Object.keys(sourceSkills) as string[]).includes(name))
+    return [...this.feishu() ? ['feishu'] : [], ...this.dingtalk() ? ['dingtalk'] : [], this.gitlab() ? 'gitlab' : 'github', ...team]
       .map(name => [name, composeSkill(config, name)])
   }
   current(): PromptVersion {

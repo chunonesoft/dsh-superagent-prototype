@@ -61,7 +61,7 @@ export const dingtalkKind: SourceKind<DingtalkConfig> = {
     }).strict(),
     fields: [
       { key: 'allowed', type: 'rows', label: { zh: '能发起工作的钉钉用户', en: 'DingTalk users who may originate work' },
-        hint: { zh: '填员工在企业里的 staffId，从面板上被过滤的消息里复制。不是企业成员的人没有 staffId，不能加入名单。', en: 'The staffId of a member of the organization, which you can copy from a filtered message in the panel. Someone outside the organization has no staffId and cannot be listed.' },
+        hint: { zh: '填员工在企业里的 staffId，即钉钉管理后台通讯录成员详情里的 userId，也可以请管理员查。不是企业成员的人没有 staffId，不能加入名单。', en: 'The staffId of a member of the organization, which the member details in the contacts of the DingTalk admin console show as the user ID; an administrator can look it up. Someone outside the organization has no staffId and cannot be listed.' },
         columns: [{ key: 'id', type: 'text', label: { zh: 'staffId', en: 'staffId' }, pattern: '[A-Za-z0-9_.\\-]{1,64}' }, { key: 'name', type: 'text', label: { zh: '名字', en: 'Name' }, optional: true }] },
     ],
     explicit: { zh: '名单内的人 @ 机器人或私聊机器人，总是明确的请求，不需要配置。', en: 'Someone on the list who mentions the robot or messages it directly always makes an explicit request; that needs no setting.' },
