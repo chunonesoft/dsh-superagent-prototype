@@ -370,6 +370,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/github-read.ts` | CI snapshots, repository reads, the `github/` resources, and `githubThreadContext`: an Issue's or pull request's conversation by page |
 | `src/sources/gitlab-trigger.ts` | GitLab notes, Issue and merge request bodies and pipeline changes as Triggers, and GitLab addresses |
 | `src/sources/gitlab-channel.ts` | The GitLab Channel: notes on an Issue or merge request, `sent` or `gone` |
+| `src/sources/gitlab-mr.ts` | The merge request rules, as `github-pull.ts` has them for pull requests: which merge requests a Ticket follows (`claimMr`, `observeMr`), the closes it reports to the Engine, `mrEndNotices`, and `gitlabPullHost`, the `PullHost` of a GitLab deployment |
 | `src/sources/feishu.ts` | The Feishu kind and plugin entry, exported as `./feishu-watch` |
 | `src/sources/feishu-trigger.ts` | Feishu messages as Triggers, by one rule for live events, history pages and topic pages |
 | `src/sources/feishu-loops.ts` | The Feishu loops: the event consumer, history recovery, chat names and polling of subscribed topics |
@@ -412,7 +413,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/pulls.spec.ts` | The pull requests a Ticket follows, read from the Thread keys of either code host |
-| `tests/gitlab.spec.ts` | GitLab notes, Issue and merge request bodies and pipelines as Triggers, GitLab addresses, and the Channel's notes |
+| `tests/gitlab.spec.ts` | GitLab notes, Issue and merge request bodies and pipelines as Triggers, GitLab addresses, the Channel's notes, and the merge request rules |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |

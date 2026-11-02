@@ -1,11 +1,20 @@
-/** GitLab notes, Issues, merge requests and pipelines as Triggers, and the Channel that answers them with notes. */
+/** GitLab notes, Issues, merge requests and pipelines as Triggers, the Channel that answers them with notes, and the merge request rules. */
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { key, threadKey, type OutboundMessage } from '../src/core/index.ts'
+import { Engine, key, threadKey, type Assessor, type Executor, type OutboundMessage, type Ticket, type Trigger } from '../src/core/index.ts'
+import { Store } from '../src/app/store.ts'
+import { sourceContextOf } from '../src/app/source-context.ts'
 import { Commands, commandError } from '../src/infra/commands.ts'
+import { HealthBoard } from '../src/infra/health.ts'
+import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { gitlabLink, sendGitlab } from '../src/sources/gitlab-channel.ts'
+import { claimMr, gitlabPullHost, mrEndNotices, observeMr, type Mr } from '../src/sources/gitlab-mr.ts'
 import { gitlabAddress, gitlabChannel, IssueSchema, mentions, MergeRequestSchema, NoteSchema, noteTrigger, openedTrigger, pipelineTrigger,
   SOURCE, threadIdOf, type GitlabRef } from '../src/sources/gitlab-trigger.ts'
-import { pullNumbers } from '../src/sources/pulls.ts'
+import { pullNumbers, pullOf } from '../src/sources/pulls.ts'
+import { SourceRegistry } from '../src/sources/registry.ts'
 import { testDeployment, testGitlabDeployment } from './fixtures/deployment.ts'
 
 const AGENT = 'agent.bot'
@@ -272,5 +281,193 @@ describe('GitLab Channel', () => {
     // With no page to name the link is empty, not built from the instance's address or the repository.
     expect(gitlabLink(gitlabChannel(mr).address, { repository: 'acme/widgets' })).toEqual({ url: '', label: { zh: 'GitLab MR !7', en: 'GitLab MR !7' } })
     expect(gitlabChannel(mr).address).toEqual({ kind: 'mr', iid: '7' })
+  })
+})
+
+/** A `SourceContext` of the GitLab deployment over a real Store and Engine; what the Engine sends is kept as receipts, not delivered. */
+function host() {
+  const store = new Store(join(mkdtempSync(join(tmpdir(), 'gitlab-')), 'db.sqlite'))
+  store.saveSettings(SettingsSchema.parse({ policy: { sources: { gitlab: { allowed: [{ id: 'alice' }] } } }, eval: { mode: 'auto' } }))
+  const sources = new SourceRegistry(() => store.settings(), new HealthBoard())
+  const deployment = testGitlabDeployment()
+  const assessor: Assessor = { request: vi.fn(async () => {}) }
+  const executor: Executor = { start: vi.fn(async () => {}), deliver: vi.fn(async () => {}), stop: vi.fn(async () => {}) }
+  const outbox = { send: () => {}, status: () => undefined, withdraw: () => {} }
+  const engine = new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(store.settings(), sources), assessor, executor, outbox })
+  const commands = new Commands(() => deployment, {}, new AbortController().signal)
+  const receive = vi.fn(async (trigger: Trigger) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
+  const context = sourceContextOf({ store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
+    ready: Promise.resolve(), configured: () => true, receive }, { kind: SOURCE, health: [SOURCE] })
+  return { ...context, store, engine, commands, receive, executor }
+}
+/** A ticket that has not ended and works in a directory named `fix-login`, so `agent/fix-login` is its branch. */
+const live = (id: string, overrides: Partial<Ticket> = {}): Ticket => ({ id, title: id, decisionId: `d-${id}`,
+  mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'listed' }, actor: { source: SOURCE, id: 'alice' }, scope: '' },
+  channels: [], assignments: [{ id: `a-${id}`, state: 'running', createdAt: '2026-11-01T00:00:00.000Z' }], inputs: [], undelivered: [],
+  createdAt: '', updatedAt: '', execution: { name: 'fix-login', directory: '/w/fix-login', assignment: '' },
+  origin: { triggerId: `source-${id}`, triggerIds: [] }, ...overrides })
+
+describe('GitLab merge requests', () => {
+  /** A merge request the agent opened from the ticket branch of `live`. */
+  const agents = (iid = 7, overrides: Record<string, unknown> = {}): Mr => MergeRequestSchema.parse({ ...mrPayload, iid, author: { username: AGENT },
+    web_url: `${WEB}/merge_requests/${iid}`, ...overrides })
+
+  it('binds an MR the agent opened from the ticket branch', async () => {
+    const h = host()
+    h.store.tickets.save(live('t1'))
+    expect(claimMr(h, 't1', agents())).toBeUndefined()
+    expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: 'gitlab:mr:7', own: true }])
+    expect(pullOf(h.store.tickets.get('t1')!)).toBe(7)
+    // The Thread keeps the page GitLab named and the author, and the ticket subscribes to it.
+    expect(h.store.threads.get('gitlab:mr:7')).toMatchObject({ subscriptions: ['t1'],
+      meta: { iid: 7, isMr: true, url: `${WEB}/merge_requests/7`, mrAuthor: AGENT } })
+    // Claiming it again changes nothing, and a poll binds the agent's MR to the one ticket on its branch.
+    expect(claimMr(h, 't1', agents())).toBeUndefined()
+    expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: 'gitlab:mr:7', own: true }])
+    h.store.tickets.save(live('t2', { execution: { name: 'fix-cart', directory: '/w/fix-cart', assignment: '' } }))
+    expect(await observeMr(h, agents(9, { source_branch: 'agent/fix-cart' }))).toBe(false)
+    expect(h.store.tickets.get('t2')!.follows).toEqual([{ thread: 'gitlab:mr:9', own: true }])
+    // The merge request the ticket started from is one it follows, though it did not open it.
+    const started = noteTrigger(note(), { kind: 'mr', iid: 5, url: `${WEB}/merge_requests/5`, mrAuthor: 'carol' }, AGENT)!
+    h.store.triggers.save(started)
+    h.store.tickets.save(live('t3', { origin: { triggerId: started.id, triggerIds: [started.id] } }))
+    expect(claimMr(h, 't3', agents(5, { author: { username: 'carol' }, source_branch: 'fix' }))).toBeUndefined()
+    expect(h.store.tickets.get('t3')!.follows).toEqual([{ thread: 'gitlab:mr:5', own: false }])
+    h.store.close()
+  })
+
+  it('refuses an MR from another author or branch', async () => {
+    const h = host()
+    h.store.tickets.save(live('t1'))
+    // Another author, another branch, a fork, a fork since deleted, and a project other than the configured one.
+    for (const mr of [agents(7, { author: { username: 'carol' } }), agents(7, { source_branch: 'agent/other' }), agents(7, { source_branch: 'fix-login-2' }),
+      agents(7, { source_project_id: 43 }), agents(7, { source_project_id: null }), agents(7, { source_project_id: 43, target_project_id: 43 })]) {
+      expect(claimMr(h, 't1', mr)).toContain('MR does not belong to this ticket: use the source MR or an MR by agent.bot')
+      // A poll does not bind it to the ticket on that branch either.
+      await observeMr(h, mr)
+    }
+    expect(pullNumbers(h.store.tickets.get('t1')!)).toEqual([])
+    expect(h.store.threads.get('gitlab:mr:7')).toBeUndefined()
+    // The agent is told apart by its user name without regard to case, and the ticket's branch by its last path segment.
+    expect(claimMr(h, 't1', agents(8, { author: { username: 'Agent.Bot' }, source_branch: 'feature/fix-login' }))).toBeUndefined()
+    // A merge request that is not open is not bound, and that is no refusal.
+    expect(claimMr(h, 't1', agents(10, { state: 'closed' }))).toBeUndefined()
+    expect(pullNumbers(h.store.tickets.get('t1')!)).toEqual([8])
+    // A ticket that has ended follows nothing more.
+    h.store.tickets.save(live('t4', { ended: { at: '2026-11-01T01:00:00.000Z', by: 'executor', outcome: 'closed' } }))
+    expect(claimMr(h, 't4', agents(11))).toBe('Ticket ended because its MR was closed')
+    h.store.close()
+  })
+
+  it('refuses an MR that another open ticket holds', () => {
+    const h = host()
+    h.store.tickets.save(live('t1'))
+    h.store.tickets.save(live('t2', { follows: [{ thread: 'gitlab:mr:7', own: true }] }))
+    expect(claimMr(h, 't1', agents())).toBe('MR already belongs to another active ticket')
+    expect(pullNumbers(h.store.tickets.get('t1')!)).toEqual([])
+    // A pull request of that number on another code host is another thing, and a ticket that ended holds nothing.
+    h.store.tickets.save(live('t2', { follows: [{ thread: 'github:7', own: true }] }))
+    expect(claimMr(h, 't1', agents())).toBeUndefined()
+    h.store.tickets.save(live('t1', { follows: undefined }))
+    h.store.tickets.save(live('t2', { follows: [{ thread: 'gitlab:mr:7', own: true }], ended: { at: '2026-11-01T01:00:00.000Z', by: 'executor', outcome: 'closed' } }))
+    expect(claimMr(h, 't1', agents())).toBeUndefined()
+    h.store.close()
+  })
+
+  it('ends the ticket when the MR merges', async () => {
+    const h = host()
+    h.store.tickets.save(live('t1', { follows: [{ thread: 'gitlab:mr:7', own: true }] }))
+    // The merge time carries the instance's offset, and the ticket ends at that instant.
+    expect(await observeMr(h, agents(7, { state: 'merged', merged_at: '2026-11-01T12:00:00.000+08:00' }))).toBe(true)
+    expect(h.store.tickets.get('t1')).toMatchObject({ ended: { by: 'executor', outcome: 'merged', at: '2026-11-01T04:00:00.000Z' } })
+    expect(h.executor.stop).toHaveBeenCalledOnce()
+    // GitLab 11.7 can send no merge time, and the last change is then the merge.
+    h.store.tickets.save(live('t2', { follows: [{ thread: 'gitlab:mr:8', own: true }] }))
+    expect(await observeMr(h, agents(8, { state: 'merged', merged_at: null, updated_at: '2026-11-01T05:30:00.000Z' }))).toBe(true)
+    expect(h.store.tickets.get('t2')).toMatchObject({ ended: { outcome: 'merged', at: '2026-11-01T05:30:00.000Z' } })
+    // A merge request closed without merging ends it as closed, at the time GitLab names or else the last change.
+    h.store.tickets.save(live('t3', { follows: [{ thread: 'gitlab:mr:9', own: true }, { thread: 'gitlab:mr:10', own: true }] }))
+    expect(await observeMr(h, agents(9, { state: 'closed', closed_at: '2026-11-01T06:00:00.000Z' }))).toBe(true)
+    expect(h.store.tickets.get('t3')).not.toHaveProperty('ended')
+    expect(await observeMr(h, agents(10, { state: 'closed', closed_at: null, updated_at: '2026-11-01T15:00:00.000+08:00' }))).toBe(true)
+    expect(h.store.tickets.get('t3')).toMatchObject({ ended: { outcome: 'closed', at: '2026-11-01T07:00:00.000Z' } })
+    // A merge request nobody follows ends nothing, and is still ended.
+    expect(await observeMr(h, agents(11, { state: 'merged' }))).toBe(true)
+    h.store.close()
+  })
+
+  it('reads a work-in-progress MR with no draft field as open', async () => {
+    const h = host()
+    h.store.tickets.save(live('t1'))
+    // GitLab 11.7 marks a draft with `work_in_progress` and sends no `draft`: the merge request is open, and still the ticket's.
+    const draft = agents(7, { work_in_progress: true })
+    expect(draft).not.toHaveProperty('draft')
+    expect(await observeMr(h, draft)).toBe(false)
+    expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: 'gitlab:mr:7', own: true }])
+    expect(h.store.tickets.get('t1')).not.toHaveProperty('ended')
+    // One being merged is not ended yet either.
+    expect(await observeMr(h, agents(7, { state: 'locked' }))).toBe(false)
+    expect(h.store.tickets.get('t1')).not.toHaveProperty('ended')
+    // A merge request the ticket followed until it closed, and that is open again, is followed again.
+    h.store.tickets.save(live('t2', { execution: { name: 'fix-cart', directory: '/w/fix-cart', assignment: '' },
+      follows: [{ thread: 'gitlab:mr:8', own: true, closed: { at: '2026-11-01T02:00:00.000Z', outcome: 'closed' } }] }))
+    await observeMr(h, agents(8, { source_branch: 'agent/fix-cart' }))
+    expect(h.store.tickets.get('t2')!.follows).toEqual([{ thread: 'gitlab:mr:8', own: true }])
+    h.store.close()
+  })
+
+  it('words the end notice as an MR with its web_url', () => {
+    const h = host()
+    const feishu = { source: 'feishu', thread: 'feishu:oc_1:om_1', address: { chatId: 'oc_1', messageId: 'om_1' } }
+    const ended = (outcome: 'merged' | 'closed', overrides: Partial<Ticket> = {}): Ticket => live('t1', { channels: [feishu, gitlabChannel(mr, mr.url)],
+      follows: [{ thread: 'gitlab:mr:7', own: true, closed: { at: '2026-11-01T04:00:00.000Z', outcome } }],
+      ended: { at: '2026-11-01T04:00:00.000Z', by: 'executor', outcome }, ...overrides })
+    // The page is the one GitLab named, which the Thread recorded; it is never built from the project's address.
+    h.store.threads.save({ key: 'gitlab:mr:7', ref: { source: SOURCE, id: 'mr:7' }, createdAt: '', subscriptions: ['t1'], correlated: [], pending: [],
+      meta: { url: `${WEB}/merge_requests/7` } })
+    const pulls = gitlabPullHost(h)
+    const link = `[MR !7](${WEB}/merge_requests/7)`
+    // A request in Chinese gets the notice in Chinese, and only chat conversations get it: a GitLab one shows the merge itself.
+    expect(pulls.endNotices(ended('merged'), '修一下登录')).toEqual([{ id: expect.any(String), channel: feishu, text: `${link} 已合并。`, kind: 'notice',
+      ticketId: 't1' }])
+    expect(pulls.endNotices(ended('closed'), '修一下登录')[0]!.text).toBe(`${link} 已关闭，未合并。`)
+    expect(pulls.endNotices(ended('merged'), 'fix the login')[0]!.text).toBe(`${link} has merged.`)
+    expect(pulls.endNotices(ended('closed'), 'ログインを直して (login)')[0]!.text).toBe(`${link} was closed without merging.`)
+    // Each notice has an id of its own, the same one every time.
+    const notice = pulls.endNotices(ended('merged'), 'fix')[0]!
+    expect(pulls.endNotices(ended('merged'), 'fix')[0]!.id).toBe(notice.id)
+    expect(pulls.endNotices(ended('closed'), 'fix')[0]!.id).not.toBe(notice.id)
+    // The merge request the ticket opened last is named; a Thread with no recorded page is named without a link.
+    const two = ended('merged', { follows: [{ thread: 'gitlab:mr:7', own: true, closed: { at: '2026-11-01T03:00:00.000Z', outcome: 'closed' } },
+      { thread: 'gitlab:mr:8', own: true, closed: { at: '2026-11-01T04:00:00.000Z', outcome: 'merged' } }] })
+    expect(pulls.endNotices(two, 'fix')[0]!.text).toBe('MR !8 has merged.')
+    expect(mrEndNotices(two, 'fix', iid => `${WEB}/merge_requests/${iid}`)[0]!.text).toBe(`[MR !8](${WEB}/merge_requests/8) has merged.`)
+    // A ticket that is still open, ended otherwise, or followed no merge request has no notice.
+    expect(pulls.endNotices(live('t1', { channels: [feishu] }), 'fix')).toEqual([])
+    expect(pulls.endNotices(ended('merged', { ended: { at: '2026-11-01T04:00:00.000Z', by: 'human', outcome: 'stopped' } }), 'fix')).toEqual([])
+    expect(pulls.endNotices(ended('merged', { follows: [{ thread: 'gitlab:issue:3', own: true, closed: { at: '2026-11-01T04:00:00.000Z', outcome: 'merged' } }] }), 'fix')).toEqual([])
+    h.store.close()
+  })
+
+  it('reads and binds the merge request the agent reports, and names the agent for the tools', async () => {
+    const h = host()
+    h.store.tickets.save(live('t1'))
+    const run = vi.spyOn(h.commands, 'run').mockResolvedValue(JSON.stringify(agents(7, { description: 'x' })))
+    const pulls = gitlabPullHost(h)
+    expect(pulls.agent).toBe(AGENT)
+    // The merge request is read through the project's API before the transaction that binds it.
+    const claim = await pulls.prepare(7)
+    expect(run.mock.calls.map(call => call[1])).toEqual([['api', 'projects/42/merge_requests/7']])
+    expect(pullNumbers(h.store.tickets.get('t1')!)).toEqual([])
+    expect(claim('t1')).toBeUndefined()
+    expect(pullOf(h.store.tickets.get('t1')!)).toBe(7)
+    // What GitLab sends that is no merge request fails the read, and so does a failure of the command.
+    run.mockResolvedValueOnce('{"message":"404 Not found"}')
+    await expect(pulls.prepare(8)).rejects.toThrow()
+    run.mockRejectedValueOnce(commandError({ stderr: 'glab: HTTP 404', code: 1 }))
+    await expect(pulls.prepare(8)).rejects.toMatchObject({ code: 404 })
+    // A deployment with no GitLab account has no merge requests.
+    expect(() => gitlabPullHost({ ...h, deployment: testDeployment() })).toThrow('This installation has no GitLab account')
+    h.store.close()
   })
 })
