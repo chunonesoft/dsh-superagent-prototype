@@ -28,6 +28,12 @@ const LEFT = new RegExp([
  */
 const gone = (error: unknown): boolean =>
   error instanceof CliError && error.code !== undefined && [400, 403, 404].includes(error.code) && LEFT.test(error.message)
+/**
+ * True when the robot API refuses a direct send because DingTalk does not know the person: `dingtalk-bot` reports a staff ID that comes
+ * back in `invalidStaffIdList` as HTTP 400 with these words. The staff ID came from DingTalk itself, so no retry will make it known.
+ */
+const unknownPerson = (error: unknown): boolean =>
+  error instanceof CliError && error.code === 400 && /does not know the person/i.test(error.message)
 
 /** Whether the address names a session webhook that has not yet expired. */
 const live = (address: Record<string, string>): boolean => !!address.webhook && Number(address.expires) > Date.now()
@@ -35,7 +41,7 @@ const live = (address: Record<string, string>): boolean => !!address.webhook && 
 /**
  * Replies in the conversation the target message came from, titled with the Thread's marker so that a quote of the reply finds the
  * Thread again. A live session webhook is tried first, as it can mention the sender; if it fails for any reason, or has expired, the robot
- * API sends instead, and only its answer decides `gone`. Neither has an idempotency key: a send whose answer was lost may be sent twice.
+ * API sends instead, and only its answer decides `gone`, but for a direct chat it cannot reach: one whose sender has no staff ID. Neither has an idempotency key: a send whose answer was lost may be sent twice.
  */
 export async function sendDingtalk(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const { address } = message.channel
@@ -55,11 +61,12 @@ export async function sendDingtalk(host: Pick<SourceContext, 'commands'>, messag
       /* The webhook expired early or was refused; the robot API still reaches the conversation. */
     }
   }
-  // A group is reached by its conversation, a direct chat by the person.
-  if (direct && !staffId) throw new Error('DingTalk cannot reach this direct chat: its session webhook is gone and the sender has no staff ID')
+  // A group is reached by its conversation, a direct chat by the person. A sender outside the organization has no staff ID, so once
+  // the session webhook is gone nothing reaches that direct chat again, however often it is tried.
+  if (direct && !staffId) return 'gone'
   try { await send(direct ? ['--user', staffId!] : ['--conversation', conversationId]) }
   catch (error) {
-    if (gone(error)) return 'gone'
+    if (gone(error) || (direct && unknownPerson(error))) return 'gone'
     throw error
   }
   return 'sent'

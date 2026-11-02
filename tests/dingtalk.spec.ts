@@ -207,8 +207,10 @@ describe('DingTalk Channel', () => {
     await sendDingtalk(plain.host, none)
     await sendDingtalk(plain.host, without(reply({ direct: 'true' }), 'webhook', 'expires'))
     expect(plain.dingtalk.mock.calls.map(([args]) => args)).toEqual([api, ['message', 'send', '--user', 'staff-1', '--title', TITLE, '--text-stdin']])
-    // A direct chat with a stranger and no live webhook cannot be reached; that is not a conversation that is gone.
-    await expect(sendDingtalk(bot().host, without(reply({ direct: 'true' }), 'webhook', 'expires', 'staffId'))).rejects.toThrow('staff ID')
+    // A direct chat with a stranger and no live webhook can never be reached again, so the reply is dropped without a call.
+    const stranger = bot()
+    expect(await sendDingtalk(stranger.host, without(reply({ direct: 'true' }), 'webhook', 'expires', 'staffId'))).toBe('gone')
+    expect(stranger.dingtalk).not.toHaveBeenCalled()
   })
 
   it('answers gone when the bot left the chat and throws otherwise', async () => {
@@ -226,6 +228,12 @@ describe('DingTalk Channel', () => {
       // Wording that mentions a conversation without saying the robot is out of it.
       refused(403, 'Forbidden.AccessDenied: no permission to send to the conversation')]
     for (const error of retry) await expect(sendDingtalk(bot(error).host, reply({ expires: '0' })), error.message).rejects.toThrow(error.message)
+    // DingTalk not knowing the person of a direct chat is final too, but only for a direct send: in a group the words mean something else.
+    const unknown = refused(400, 'DingTalk does not know the person to send to')
+    expect(await sendDingtalk(bot(unknown).host, reply({ direct: 'true', expires: '0' }))).toBe('gone')
+    await expect(sendDingtalk(bot(unknown).host, reply({ expires: '0' }))).rejects.toThrow('does not know')
+    // A throttled person is retried.
+    await expect(sendDingtalk(bot(refused(429, 'DingTalk is limiting the messages to this person')).host, reply({ direct: 'true', expires: '0' }))).rejects.toThrow('limiting')
     // Only the robot API's answer counts: a webhook that fails with such words falls back, and the API decides.
     const webhookWords = refused(403, 'Forbidden.AccessDenied: the robot is not in the conversation')
     expect(await sendDingtalk(bot(webhookWords, { key: 'k' }).host, reply())).toBe('sent')
