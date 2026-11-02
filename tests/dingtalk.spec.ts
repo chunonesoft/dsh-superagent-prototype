@@ -15,7 +15,8 @@ import { KV } from '../src/kv.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { SetupError } from '../src/setup.ts'
 import { apply as applyDingtalk, dingtalkKind } from '../src/sources/dingtalk.ts'
-import { sendDingtalk } from '../src/sources/dingtalk-channel.ts'
+import { WEBHOOK_VARIABLE as CLI_WEBHOOK_VARIABLE } from '../src/cli/dingtalk-bot.ts'
+import { WEBHOOK_VARIABLE, sendDingtalk } from '../src/sources/dingtalk-channel.ts'
 import { prune, runDingtalk } from '../src/sources/dingtalk-loops.ts'
 import { BotMessageSchema, SOURCE, dingtalkTrigger, dingtalkTriggerId, markerIn, replyTitle, threadMarker, type Roots }
   from '../src/sources/dingtalk-trigger.ts'
@@ -179,7 +180,11 @@ describe('DingTalk Channel', () => {
   it('prefers a live webhook and mentions the sender', async () => {
     const { host, dingtalk } = bot({ ok: true })
     expect(await sendDingtalk(host, reply())).toBe('sent')
-    expect(dingtalk.mock.calls).toEqual([[['message', 'send', '--conversation', 'cid-test==', '--title', TITLE, '--text-stdin', '--webhook', HOOK, '--at', 'staff-1'], 'Done.']])
+    // The webhook travels in the CLI's environment, never in its arguments, which other local users can read in the process list.
+    expect(dingtalk.mock.calls).toEqual([[['message', 'send', '--conversation', 'cid-test==', '--title', TITLE, '--text-stdin', '--webhook-env', '--at', 'staff-1'], 'Done.',
+      { DINGTALK_BOT_WEBHOOK: HOOK }]])
+    expect(JSON.stringify(dingtalk.mock.calls[0]![0])).not.toContain(HOOK)
+    expect(WEBHOOK_VARIABLE).toBe(CLI_WEBHOOK_VARIABLE)
     // The title names the Thread, so a quote of this reply finds it.
     expect(markerIn(TITLE)).toBe(threadMarker(`dingtalk:${THREAD}`))
     // A direct chat needs no mention, and a sender with no staff ID cannot be named.
@@ -193,12 +198,12 @@ describe('DingTalk Channel', () => {
     const api = ['message', 'send', '--conversation', 'cid-test==', '--title', TITLE, '--text-stdin']
     const expired = bot({ key: 'k1' })
     expect(await sendDingtalk(expired.host, reply({ expires: String(Date.now() - 1) }))).toBe('sent')
-    expect(expired.dingtalk.mock.calls).toEqual([[api, 'Done.']])
+    expect(expired.dingtalk.mock.calls).toEqual([[api, 'Done.', undefined]])
     // A webhook DingTalk refuses early, by a code its answer reports, falls back to the API in the same send, whatever the code says.
     const turnedDown = bot(refused(310000, 'DingTalk refused the webhook message: session expired'), { key: 'k2' })
     expect(await sendDingtalk(turnedDown.host, reply())).toBe('sent')
-    expect(turnedDown.dingtalk.mock.calls.map(([args]) => (args as string[]).includes('--webhook'))).toEqual([true, false])
-    expect(turnedDown.dingtalk.mock.calls[1]).toEqual([api, 'Done.'])
+    expect(turnedDown.dingtalk.mock.calls.map(([args]) => (args as string[]).includes('--webhook-env'))).toEqual([true, false])
+    expect(turnedDown.dingtalk.mock.calls[1]).toEqual([api, 'Done.', undefined])
     const unreachable = bot(new CliError('dingtalk-bot exited with code 1'), { key: 'k3' })
     expect(await sendDingtalk(unreachable.host, reply())).toBe('sent')
     // No webhook at all goes straight to the API, and a direct chat is reached by its person.

@@ -74,11 +74,14 @@ export class Commands {
     return this.deployment.repository!
   }
   withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
-  /** Runs `program` and returns its output; `stdin` is the text it reads on standard input, which stays open and unused without it. */
-  async run(program: string, args: string[], cwd?: string, stdin?: string): Promise<string> {
+  /**
+   * Runs `program` and returns its output; `stdin` is the text it reads on standard input, which stays open and unused without it.
+   * `env` adds variables for this command alone, such as a value that must not show in the process list as an argument would.
+   */
+  async run(program: string, args: string[], cwd?: string, stdin?: string, env: Record<string, string> = {}): Promise<string> {
     try {
       const pending = exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
+        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1', ...env } })
       if (stdin !== undefined) {
         // A program that ends without reading its input closes the pipe; how it ended is what the caller hears.
         pending.child.stdin?.on('error', () => {})
@@ -161,13 +164,14 @@ export class Commands {
     return result.data
   }
   /**
-   * Runs the DingTalk bot's `dingtalk-bot` CLI and returns the JSON it prints; `stdin` is the text its `--text-stdin` option reads.
-   * @throws CliError with the HTTP status the CLI reports as `code`. Its message never holds the arguments, which may carry a session webhook.
+   * Runs the DingTalk bot's `dingtalk-bot` CLI and returns the JSON it prints; `stdin` is the text its `--text-stdin` option reads, and
+   * `env` the variables it reads, such as the session webhook of `--webhook-env`, which other local users would see as an argument.
+   * @throws CliError with the HTTP status the CLI reports as `code`. Its message never holds the arguments or the variables.
    */
-  async dingtalk(args: string[], stdin?: string): Promise<unknown> {
+  async dingtalk(args: string[], stdin?: string, env?: Record<string, string>): Promise<unknown> {
     const bot = this.deployment.dingtalk
     if (!bot) throw new Error('The DingTalk Source has no working bot CLI')
-    return JSON.parse(await this.run(bot.cli, args, undefined, stdin)) as unknown
+    return JSON.parse(await this.run(bot.cli, args, undefined, stdin, env)) as unknown
   }
   /** Runs `git` on PATH using the agent's isolated git environment and credential helper. */
   async git(args: string[], cwd: string): Promise<string> { return this.run('git', args, cwd) }

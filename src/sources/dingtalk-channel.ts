@@ -35,6 +35,11 @@ const gone = (error: unknown): boolean =>
 const unknownPerson = (error: unknown): boolean =>
   error instanceof CliError && error.code === 400 && /does not know the person/i.test(error.message)
 
+/**
+ * The variable `dingtalk-bot message send --webhook-env` reads the session webhook from. The CLI's own constant is not imported: the CLI
+ * is a separate entry that imports nothing of the package, and the bundle must not share a chunk with it. A test keeps the two equal.
+ */
+export const WEBHOOK_VARIABLE = 'DINGTALK_BOT_WEBHOOK'
 /** Whether the address names a session webhook that has not yet expired. */
 const live = (address: Record<string, string>): boolean => !!address.webhook && Number(address.expires) > Date.now()
 
@@ -50,11 +55,13 @@ export async function sendDingtalk(host: Pick<SourceContext, 'commands'>, messag
   const text = checkedImText(message.text)
   const title = replyTitle(threadKey({ source: SOURCE, id: thread }))
   const direct = address.direct === 'true'
-  const send = (target: [string, string], ...extra: string[]) => host.commands.dingtalk(['message', 'send', ...target, '--title', title, '--text-stdin', ...extra], text)
+  const send = (target: [string, string], extra: string[] = [], env?: Record<string, string>) =>
+    host.commands.dingtalk(['message', 'send', ...target, '--title', title, '--text-stdin', ...extra], text, env)
   if (live(address)) {
     try {
       // Nobody needs a mention in a direct chat, and a sender with no staff ID cannot be named.
-      await send(['--conversation', conversationId], '--webhook', address.webhook!, ...!direct && staffId ? ['--at', staffId] : [])
+      // The webhook answers anyone who holds it, so it goes in the CLI's environment, which other local users cannot read, not in its arguments.
+      await send(['--conversation', conversationId], ['--webhook-env', ...!direct && staffId ? ['--at', staffId] : []], { [WEBHOOK_VARIABLE]: address.webhook! })
       return 'sent'
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') throw error

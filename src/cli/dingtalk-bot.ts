@@ -16,6 +16,8 @@ const API = 'https://api.dingtalk.com'
 export const ROBOT_TOPIC = '/v1.0/im/bot/messages/get'
 /** A connection that hears nothing, not even the gateway's pings, for this long is taken for dead; the host restarts the consumer. */
 export const IDLE_MS = 300_000
+/** The variable `message send --webhook-env` reads the session webhook from: an argument would show in the process list. */
+export const WEBHOOK_VARIABLE = 'DINGTALK_BOT_WEBHOOK'
 
 export interface BotConfig { clientId: string; clientSecret: string; robotCode: string }
 type Fetch = typeof fetch
@@ -215,7 +217,7 @@ function parse(argv: string[]) {
   try {
     return parseArgs({ args: argv, allowPositionals: true, options: { 'client-id': { type: 'string' }, 'client-secret-stdin': { type: 'boolean' },
       'robot-code': { type: 'string' }, conversation: { type: 'string' }, user: { type: 'string' }, title: { type: 'string' },
-      'text-stdin': { type: 'boolean' }, webhook: { type: 'string' }, at: { type: 'string', multiple: true } } })
+      'text-stdin': { type: 'boolean' }, webhook: { type: 'string' }, 'webhook-env': { type: 'boolean' }, at: { type: 'string', multiple: true } } })
   } catch { throw new BotError('Unrecognized command line. Commands: config init, auth status, event consume, message send') }
 }
 async function dispatch(argv: string[], io: Io, secrets: string[]): Promise<unknown> {
@@ -251,8 +253,12 @@ async function dispatch(argv: string[], io: Io, secrets: string[]): Promise<unkn
     case 'message send': {
       if (!values.title || !values['text-stdin']) throw new BotError('Pass --title and --text-stdin; the text is read from stdin')
       const config = await configured()
+      // Read only when asked for, so a variable left in a shell never turns a send into a webhook send.
+      const webhook = values['webhook-env'] ? io.env[WEBHOOK_VARIABLE] : values.webhook
+      if (values['webhook-env'] && !webhook) throw new BotError(`--webhook-env reads the webhook from ${WEBHOOK_VARIABLE}, which is empty`)
+      if (webhook) secrets.push(webhook)
       return sendMessage(config, { title: values.title, text: (await readAll(io.stdin)).replace(/\n$/, ''), conversation: values.conversation,
-        user: values.user, webhook: values.webhook, at: values.at }, io.fetch)
+        user: values.user, webhook, at: values.at }, io.fetch)
     }
     default: throw new BotError('Unrecognized command. Commands: config init, auth status, event consume, message send')
   }

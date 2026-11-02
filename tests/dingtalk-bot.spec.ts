@@ -209,6 +209,25 @@ describe('message send', () => {
     expect(calls[1]!.body).toMatchObject({ markdown: { text: 'Hi @staff-1' }, at: { atUserIds: ['staff-1'] } })
   })
 
+  it('reads the webhook from its variable only when told to', async () => {
+    const { fetch, calls } = respond({ [HOOK]: () => answer({ errcode: 0, errmsg: 'ok' }) })
+    const run = await configured({ fetch, stdin: 'Done.', env: { DINGTALK_BOT_WEBHOOK: HOOK } })
+    expect(await main([...send, '--webhook-env', '--at', 'staff-1'], run.io)).toBe(0)
+    expect(calls.map(call => call.url)).toEqual([HOOK])
+    // A variable left in the environment does not turn a send into a webhook send.
+    const ambient = respond({ [TOKEN]: () => answer({ accessToken: 'tok-1' }), [`${API}/v1.0/robot/groupMessages/send`]: () => answer({ processQueryKey: 'k' }) })
+    expect(await main(send, (await configured({ fetch: ambient.fetch, stdin: 'x', env: { DINGTALK_BOT_WEBHOOK: HOOK } })).io)).toBe(0)
+    expect(ambient.calls.map(call => call.url)).not.toContain(HOOK)
+    // Asked for and missing, it fails rather than sending another way; a refusal hides the address as an argument's would be.
+    const empty = await configured({ fetch, stdin: 'x' })
+    expect(await main([...send, '--webhook-env'], empty.io)).toBe(1)
+    expect(empty.err()).toContain('DINGTALK_BOT_WEBHOOK')
+    const refusing = respond({ [HOOK]: () => answer({ errcode: 310000, errmsg: `bad ${HOOK}` }) })
+    const hidden = await configured({ fetch: refusing.fetch, stdin: 'x', env: { DINGTALK_BOT_WEBHOOK: HOOK } })
+    expect(await main([...send, '--webhook-env'], hidden.io)).toBe(1)
+    expect(hidden.err()).not.toContain('hook-token')
+  })
+
   it('refuses a webhook that DingTalk turns down, without repeating its address', async () => {
     const { fetch } = respond({ [HOOK]: () => answer({ errcode: 310000, errmsg: 'session expired' }) })
     const run = await configured({ fetch, stdin: 'x' })
