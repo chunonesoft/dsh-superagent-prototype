@@ -8,8 +8,18 @@ import type { SourceContext } from './host.ts'
 import type { ChannelLink, ChannelLinks } from './kind.ts'
 import { NoteSchema, type GitlabNote } from './gitlab-trigger.ts'
 
-/** True when an Issue or merge request is permanently deleted (410); 404 is retried because it can indicate temporary permission loss on a private project. */
-const gone = (error: unknown): boolean => error instanceof CliError && error.code === 410
+const status = (error: unknown): number | undefined => error instanceof CliError ? error.code : undefined
+/**
+ * True when the Issue or merge request is gone. GitLab answers 410 for some deletions but 404 for most, and 404 also for a project the
+ * account lost access to, which may come back. So a 404 is taken for a deletion only when the project itself still answers: a reply to a
+ * deleted Issue is dropped, and one to a project the account cannot read for now is retried.
+ */
+async function gone(host: Pick<SourceContext, 'commands'>, error: unknown): Promise<boolean> {
+  if (status(error) === 410) return true
+  if (status(error) !== 404) return false
+  try { await host.commands.gitlab(z.unknown(), ''); return true }
+  catch { return false /* The project does not answer either, so access may be what is missing. */ }
+}
 /** Posts a note with an embedded HTML marker so retries do not create duplicate notes. */
 export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const { commands } = host
@@ -25,7 +35,7 @@ export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message:
     await commands.gitlab(z.unknown(), path, '--method', 'POST', '-f', `body=${message.text}\n\n${marker}`)
     return 'sent'
   } catch (error) {
-    if (gone(error)) return 'gone'
+    if (await gone(host, error)) return 'gone'
     throw error
   }
 }

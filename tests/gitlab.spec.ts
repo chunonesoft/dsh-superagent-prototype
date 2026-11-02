@@ -243,6 +243,24 @@ describe('GitLab Channel', () => {
     expect(run.mock.calls.map(call => call[1])).toEqual([read('merge_requests/7/notes', 1), read('merge_requests/7/notes', 2)])
   })
 
+  it('takes a 404 for a deletion only while the project still answers', async () => {
+    const refused = (status: number) => commandError({ stderr: `glab: HTTP ${status}`, code: 1 })
+    // GitLab answers 404 for a deleted Issue or merge request; the project still answers, so the reply is dropped.
+    for (const failing of [0, 1]) {
+      const { commands, run, calls } = glab()
+      if (failing === 1) run.mockResolvedValueOnce('[]')
+      run.mockRejectedValueOnce(refused(404))
+      expect(await sendGitlab({ commands }, reply)).toBe('gone')
+      expect(calls().at(-1)).toEqual(['api', 'projects/42'])
+    }
+    // It answers 404 for the project too when the account lost access, which may come back: the reply is retried.
+    for (const project of [404, 403, 500]) {
+      const { commands, run } = glab()
+      run.mockRejectedValueOnce(refused(404)).mockRejectedValueOnce(refused(project))
+      await expect(sendGitlab({ commands }, reply)).rejects.toMatchObject({ code: 404, message: 'glab: HTTP 404' })
+    }
+  })
+
   it('answers gone for a missing noteable and throws otherwise', async () => {
     const { commands, run } = glab()
     const refused = (status: number) => commandError({ stderr: `glab: HTTP ${status}`, code: 1 })
@@ -251,8 +269,8 @@ describe('GitLab Channel', () => {
     expect(await sendGitlab({ commands }, reply)).toBe('gone')
     run.mockResolvedValueOnce('[]').mockRejectedValueOnce(refused(410))
     expect(await sendGitlab({ commands }, reply)).toBe('gone')
-    // GitLab also answers 404 for a project the agent lost access to, so that and server errors are retried rather than dropped.
-    for (const status of [404, 500, 502]) {
+    // Server errors are retried rather than dropped.
+    for (const status of [500, 502]) {
       run.mockRejectedValueOnce(refused(status))
       await expect(sendGitlab({ commands }, reply)).rejects.toMatchObject({ code: status, message: `glab: HTTP ${status}` })
       run.mockResolvedValueOnce('[]').mockRejectedValueOnce(refused(status))
