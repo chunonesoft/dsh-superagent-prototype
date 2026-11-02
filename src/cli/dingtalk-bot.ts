@@ -1,6 +1,6 @@
 /**
  * The `dingtalk-bot` CLI: a DingTalk enterprise robot over Stream mode and the robot API, with the commands the DingTalk Source needs of a
- * bot CLI (`config init`, `auth status`, `event consume`, `message send`). It uses only Node's `fetch` and `WebSocket`, which connect
+ * bot CLI (`config init`, `auth status`, `event consume`, `message send`), and `contact members`, which lists a department's members. It uses only Node's `fetch` and `WebSocket`, which connect
  * directly, and it reads no proxy variable itself. It imports nothing of the package, so it runs alone as `lib/dingtalk-bot.js`.
  * The client secret lives in the CLI's own configuration directory (mode 600) and nowhere else: no output, log line or error holds it.
  */
@@ -12,6 +12,11 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 const API = 'https://api.dingtalk.com'
+/** The older API, where the contacts of the organization are read; it takes the same access token, as a query parameter. */
+const OAPI = 'https://oapi.dingtalk.com'
+/** The most departments and members `contact members` reads before it refuses: a list that long is not one team's. */
+export const MAX_DEPARTMENTS = 200
+export const MAX_MEMBERS = 2000
 /** The Stream topic of the messages people send to the robot. */
 export const ROBOT_TOPIC = '/v1.0/im/bot/messages/get'
 /** A connection that hears nothing, not even the gateway's pings, for this long is taken for dead; the host restarts the consumer. */
@@ -132,6 +137,55 @@ export async function sendMessage(config: BotConfig, input: SendInput, fetch: Fe
   return { key: text(answer.processQueryKey) }
 }
 
+/**
+ * Calls the older API, which answers HTTP 200 with `errcode` 0 on success and another `errcode` on failure, reported as the status.
+ * The access token is a query parameter here, so it is kept out of whatever the call reports.
+ */
+async function oapi(fetch: Fetch, path: string, token: string, body: unknown, secrets: readonly string[]): Promise<Record<string, unknown>> {
+  const answer = await call(fetch, `${OAPI}/${path}?access_token=${encodeURIComponent(token)}`, json(body), [...secrets, token])
+  if (answer.errcode !== 0) {
+    const hide = (said: string): string => [...secrets, token].filter(Boolean).reduce((result, secret) => result.replaceAll(secret, '***'), said)
+    throw new BotError(hide(`DingTalk refused ${path}: ${text(answer.errmsg) || 'no reason given'}`).slice(0, 300), Number(answer.errcode) || 0)
+  }
+  return answer
+}
+const resultOf = (answer: Record<string, unknown>): Record<string, unknown> =>
+  answer.result && typeof answer.result === 'object' ? answer.result as Record<string, unknown> : {}
+export interface Member { id: string; name: string }
+/**
+ * The members of a department and of every department below it, each once and in the order DingTalk lists them, as `id` (the staff ID
+ * that robot messages name as `senderStaffId`) and `name`. The app needs the contacts permissions to read departments and their members.
+ * @throws BotError when DingTalk refuses a call, or when the departments or members are more than MAX_DEPARTMENTS or MAX_MEMBERS.
+ */
+export async function departmentMembers(config: BotConfig, department: number, fetch: Fetch): Promise<Member[]> {
+  const token = await accessToken(config, fetch)
+  const secrets = [config.clientSecret]
+  const departments: number[] = [], waiting = [department]
+  while (waiting.length) {
+    const next = waiting.shift()!
+    if (departments.includes(next)) continue
+    departments.push(next)
+    if (departments.length > MAX_DEPARTMENTS) throw new BotError(`Department ${department} holds more than ${MAX_DEPARTMENTS} departments; choose a smaller one`)
+    const below = resultOf(await oapi(fetch, 'topapi/v2/department/listsubid', token, { dept_id: next }, secrets)).dept_id_list
+    if (Array.isArray(below)) waiting.push(...below.filter((id): id is number => Number.isSafeInteger(id)))
+  }
+  const members = new Map<string, string>()
+  for (const id of departments) {
+    for (let cursor = 0; ;) {
+      const page = resultOf(await oapi(fetch, 'topapi/user/listsimple', token, { dept_id: id, cursor, size: 100, contain_access_limit: true }, secrets))
+      for (const user of Array.isArray(page.list) ? page.list as Record<string, unknown>[] : []) {
+        if (text(user.userid) && !members.has(text(user.userid))) members.set(text(user.userid), text(user.name))
+      }
+      if (members.size > MAX_MEMBERS) throw new BotError(`Department ${department} has more than ${MAX_MEMBERS} members; choose a smaller one`)
+      if (page.has_more !== true) break
+      // A page that says there is more must name where it goes on; one that does not would be read forever.
+      if (typeof page.next_cursor !== 'number' || page.next_cursor <= cursor) throw new BotError('DingTalk returned an incomplete member list')
+      cursor = page.next_cursor
+    }
+  }
+  return [...members].map(([id, name]) => ({ id, name }))
+}
+
 export interface Frame { specVersion?: string; type?: string; headers?: { messageId?: string; topic?: string; [name: string]: unknown }; data?: string }
 export interface Reply { code: 200; headers: { contentType: 'application/json'; messageId: string }; message: 'OK'; data: string }
 /** Where a frame's effects go: the reply to the gateway, a robot message to stdout, and the end of the connection. */
@@ -217,8 +271,8 @@ function parse(argv: string[]) {
   try {
     return parseArgs({ args: argv, allowPositionals: true, options: { 'client-id': { type: 'string' }, 'client-secret-stdin': { type: 'boolean' },
       'robot-code': { type: 'string' }, conversation: { type: 'string' }, user: { type: 'string' }, title: { type: 'string' },
-      'text-stdin': { type: 'boolean' }, webhook: { type: 'string' }, 'webhook-env': { type: 'boolean' }, at: { type: 'string', multiple: true } } })
-  } catch { throw new BotError('Unrecognized command line. Commands: config init, auth status, event consume, message send') }
+      'text-stdin': { type: 'boolean' }, webhook: { type: 'string' }, 'webhook-env': { type: 'boolean' }, department: { type: 'string' }, at: { type: 'string', multiple: true } } })
+  } catch { throw new BotError('Unrecognized command line. Commands: config init, auth status, event consume, message send, contact members') }
 }
 async function dispatch(argv: string[], io: Io, secrets: string[]): Promise<unknown> {
   const { positionals, values } = parse(argv)
@@ -260,7 +314,12 @@ async function dispatch(argv: string[], io: Io, secrets: string[]): Promise<unkn
       return sendMessage(config, { title: values.title, text: (await readAll(io.stdin)).replace(/\n$/, ''), conversation: values.conversation,
         user: values.user, webhook, at: values.at }, io.fetch)
     }
-    default: throw new BotError('Unrecognized command. Commands: config init, auth status, event consume, message send')
+    case 'contact members': {
+      const department = values.department ?? ''
+      if (!/^[1-9][0-9]{0,18}$/.test(department) || !Number.isSafeInteger(Number(department))) throw new BotError('Pass --department with the ID of a department; 1 is the whole organization')
+      return { users: await departmentMembers(await configured(), Number(department), io.fetch) }
+    }
+    default: throw new BotError('Unrecognized command. Commands: config init, auth status, event consume, message send, contact members')
   }
 }
 /**

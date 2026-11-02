@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { IDLE_MS, ROBOT_TOPIC, handleFrame, main, openConnection, runConsume, sendMessage, type BotConfig, type Frame, type Io, type Reply }
+import { IDLE_MS, MAX_DEPARTMENTS, ROBOT_TOPIC, departmentMembers, handleFrame, main, openConnection, runConsume, sendMessage, type BotConfig, type Frame, type Io, type Reply }
   from '../src/cli/dingtalk-bot.ts'
 import { commandError } from '../src/infra/commands.ts'
 
@@ -299,5 +299,59 @@ describe('failures', () => {
     const none = await configured({ fetch: respond({ [TOKEN]: () => new Error('offline') }).fetch })
     await main(['auth', 'status'], none.io)
     expect(JSON.parse(none.err())).toEqual({ error: { message: 'Could not reach DingTalk: offline' } })
+  })
+})
+
+describe('contact members', () => {
+  const OAPI = 'https://oapi.dingtalk.com'
+  const SUB = `${OAPI}/topapi/v2/department/listsubid?access_token=tok-1`
+  const LIST = `${OAPI}/topapi/user/listsimple?access_token=tok-1`
+  /** An organization: each department's sub-departments, and its members in pages of two. */
+  function organization(tree: Record<number, number[]>, people: Record<number, { userid: string; name: string }[]>, overrides: Record<string, () => Response> = {}) {
+    const calls: { url: string; body: Record<string, unknown> }[] = []
+    const fetcher = (async (url: string, init: RequestInit = {}) => {
+      const body = JSON.parse(String(init.body)) as Record<string, number>
+      calls.push({ url, body })
+      if (overrides[url]) return overrides[url]()
+      if (url === TOKEN) return answer({ accessToken: 'tok-1' })
+      if (url === SUB) return answer({ errcode: 0, errmsg: 'ok', result: { dept_id_list: tree[body.dept_id!] ?? [] } })
+      if (url === LIST) {
+        const all = people[body.dept_id!] ?? [], from = body.cursor!
+        return answer({ errcode: 0, result: { list: all.slice(from, from + 2), has_more: from + 2 < all.length, ...from + 2 < all.length ? { next_cursor: from + 2 } : {} } })
+      }
+      throw new Error(`Unexpected call to ${url}`)
+    }) as unknown as Fetch
+    return { fetch: fetcher, calls }
+  }
+  const alice = { userid: 'staff-1', name: 'Alice' }, bob = { userid: 'staff-2', name: 'Bob' }, carol = { userid: 'staff-3', name: 'Carol' }
+
+  it('lists a department and every department below it, each person once', async () => {
+    const { fetch, calls } = organization({ 10: [11, 12], 11: [13] }, { 10: [alice, bob, carol], 11: [bob], 13: [{ userid: 'staff-4', name: 'Dan' }] })
+    expect(await departmentMembers(config, 10, fetch)).toEqual([{ id: 'staff-1', name: 'Alice' }, { id: 'staff-2', name: 'Bob' },
+      { id: 'staff-3', name: 'Carol' }, { id: 'staff-4', name: 'Dan' }])
+    // Pages follow the cursor DingTalk gives, 100 at a time.
+    expect(calls.filter(call => call.url === LIST && call.body.dept_id === 10).map(call => [call.body.cursor, call.body.size])).toEqual([[0, 100], [2, 100]])
+    // Through the command line, the result is one JSON line.
+    const run = await configured({ fetch })
+    expect(await main(['contact', 'members', '--department', '11'], run.io)).toBe(0)
+    expect(JSON.parse(run.out())).toEqual({ users: [{ id: 'staff-2', name: 'Bob' }, { id: 'staff-4', name: 'Dan' }] })
+  })
+
+  it('refuses a department that is not one, an organization too large, and a refusal, without the token', async () => {
+    for (const department of [[], ['--department', '0'], ['--department', 'x1'], ['--department', '99999999999999999999']]) {
+      const run = await configured()
+      expect(await main(['contact', 'members', ...department], run.io)).toBe(1)
+      expect(run.err()).toContain('--department')
+    }
+    const wide = organization(Object.fromEntries(Array.from({ length: MAX_DEPARTMENTS + 1 }, (_, id) => [id + 1, [id + 2]])), {})
+    await expect(departmentMembers(config, 1, wide.fetch)).rejects.toThrow('more than')
+    const refused = organization({}, {}, { [SUB]: () => answer({ errcode: 60011, errmsg: 'no permission tok-1' }) })
+    const run = await configured({ fetch: refused.fetch })
+    expect(await main(['contact', 'members', '--department', '1'], run.io)).toBe(1)
+    expect(JSON.parse(run.err())).toEqual({ error: { code: 60011, message: expect.stringContaining('no permission') } })
+    expect(run.err()).not.toContain('tok-1')
+    // A page that says there is more but not where is refused rather than read again forever.
+    const stuck = organization({}, {}, { [LIST]: () => answer({ errcode: 0, result: { list: [alice], has_more: true } }) })
+    await expect(departmentMembers(config, 1, stuck.fetch)).rejects.toThrow('incomplete')
   })
 })

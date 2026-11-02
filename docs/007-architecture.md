@@ -360,7 +360,7 @@ Some generic modules still refer directly to a Source:
 | `src/infra/paths.ts` | The package's root, where packaged files are |
 | `src/infra/text.ts` | Word counts and the chat message limit, `fill` and `sameName` |
 | `src/infra/health.ts` | The `HealthBoard`, every part's health entry, each claimed by its one writer |
-| `src/cli/dingtalk-bot.ts` | The `dingtalk-bot` CLI, built as `lib/dingtalk-bot.js`: a DingTalk enterprise robot over Stream mode and the robot API (`config init`, `auth status`, `event consume`, `message send`), with only Node's `fetch` and `WebSocket`; it imports nothing of the package, and its errors print a status and DingTalk's words, never the request |
+| `src/cli/dingtalk-bot.ts` | The `dingtalk-bot` CLI, built as `lib/dingtalk-bot.js`: a DingTalk enterprise robot over Stream mode and the robot API (`config init`, `auth status`, `event consume`, `message send`, `contact members`), with only Node's `fetch` and `WebSocket`; it imports nothing of the package, and its errors print a status and DingTalk's words, never the request |
 | `bin/dingtalk-bot` | The package's `dingtalk-bot` command: a shebang that runs `lib/dingtalk-bot.js` |
 | `src/sources/kind.ts` | The `SourceKind` protocol |
 | `src/sources/registry.ts` | `SourceRegistry` |
@@ -385,7 +385,7 @@ Some generic modules still refer directly to a Source:
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
-| `src/sources/dingtalk.ts` | The DingTalk kind and plugin entry, exported as `./dingtalk-watch`: the chats and direct messages it receives, the Policy's list of staff IDs, and no observed scope, history or roster sync |
+| `src/sources/dingtalk.ts` | The DingTalk kind and plugin entry, exported as `./dingtalk-watch`: the chats and direct messages it receives, the Policy's list of staff IDs, synced from a department of the contacts, and no observed scope or history |
 | `src/sources/dingtalk-trigger.ts` | DingTalk robot messages as Triggers, whichever shape they come in; which Thread a quote joins, by the message it quotes or the marker in the title of the reply it quotes (`replyTitle`, `markerIn`); and DingTalk addresses |
 | `src/sources/dingtalk-channel.ts` | The DingTalk Channel: replies through the session webhook while it lives, else through the robot API, `sent` or `gone` by one predicate over the API's answer |
 | `src/sources/dingtalk-loops.ts` | The DingTalk loops: the event consumer, restarted with backoff, and the keeping of what a quote needs for 14 days |

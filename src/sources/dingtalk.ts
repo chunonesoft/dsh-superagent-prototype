@@ -11,6 +11,8 @@ import type { Localized, SourceKind } from './kind.ts'
 /** A conversation ID, which DingTalk starts with `cid`; a staff ID is the member's ID in the organization, which holds neither `$` nor `:`, as DingTalk's opaque IDs do. */
 const CHAT_ID = /^cid[A-Za-z0-9+/=_-]+$/
 const STAFF_ID = /^[A-Za-z0-9_.-]{1,64}$/
+/** What `dingtalk-bot contact members` prints: the members of a department and those below it. */
+const MembersSchema = z.object({ users: z.array(z.object({ id: z.string(), name: z.string() })) })
 const DingtalkConfigSchema = DingtalkBotSchema.extend({
   chats: z.array(z.object({ chatId: z.string().regex(CHAT_ID), name: z.string().trim().max(60).optional() }).strict())
     .refine(chats => new Set(chats.map(chat => chat.chatId)).size === chats.length, 'Duplicate chat IDs')
@@ -58,13 +60,31 @@ export const dingtalkKind: SourceKind<DingtalkConfig> = {
     schema: z.object({
       allowed: z.array(z.object({ id: z.string().regex(STAFF_ID), name: z.string().trim().max(100).optional() }).strict())
         .refine(users => new Set(users.map(user => user.id)).size === users.length, 'Duplicate staff IDs').default([]),
+      syncDepartment: z.string().regex(/^([1-9][0-9]{0,15})?$/).default(''),
     }).strict(),
     fields: [
       { key: 'allowed', type: 'rows', label: { zh: '能发起工作的钉钉用户', en: 'DingTalk users who may originate work' },
         hint: { zh: '填员工在企业里的 staffId，即钉钉管理后台通讯录成员详情里的 userId，也可以请管理员查。不是企业成员的人没有 staffId，不能加入名单。', en: 'The staffId of a member of the organization, which the member details in the contacts of the DingTalk admin console show as the user ID; an administrator can look it up. Someone outside the organization has no staffId and cannot be listed.' },
         columns: [{ key: 'id', type: 'text', label: { zh: 'staffId', en: 'staffId' }, pattern: '[A-Za-z0-9_.\\-]{1,64}' }, { key: 'name', type: 'text', label: { zh: '名字', en: 'Name' }, optional: true }] },
+      { key: 'syncDepartment', type: 'text', pattern: '([1-9][0-9]{0,15})?', label: { zh: '同步来源部门', en: 'Sync department' }, choose: { zh: '不同步', en: 'Do not sync' },
+        hint: { zh: '填通讯录里的部门 ID（钉钉管理后台的部门详情里可以看到，1 是整个企业）。同步时，名单变成这个部门及其下所有子部门的人：新成员加入，离开的人移除，名字取通讯录里的名字。启动时和点同步时进行。机器人应用需要开通通讯录的部门和成员读权限。钉钉不提供按群读成员，所以按部门同步。', en: 'A department ID from the contacts, which the department details in the DingTalk admin console show; 1 is the whole organization. Syncing makes the list the people in this department and every department below it: new members join, people who left are removed, and names follow the contacts. It runs at startup and on Sync. The robot app needs the contacts permissions to read departments and their members. DingTalk offers no way to read a group\'s members, so the list follows a department.' } },
     ],
     explicit: { zh: '名单内的人 @ 机器人或私聊机器人，总是明确的请求，不需要配置。', en: 'Someone on the list who mentions the robot or messages it directly always makes an explicit request; that needs no setting.' },
+    sync: {
+      label: { zh: '立即同步', en: 'Sync now' },
+      ready: part => !!part.syncDepartment,
+      async run(host, part, signal) {
+        const commands = sourceContext(host, dingtalkKind).commands.withSignal(signal)
+        const { users } = MembersSchema.parse(await commands.dingtalk(['contact', 'members', '--department', String(part.syncDepartment)]))
+        // Keep the order of those who stay, so the Policy's version only changes with its people; their names follow the contacts, and
+        // newcomers are added at the end. A member DingTalk lists with an ID the Policy cannot hold is left out rather than failing the sync.
+        const current = new Map(users.filter(user => STAFF_ID.test(user.id)).map(user => [user.id, user.name.trim().slice(0, 100)]))
+        const known = new Set(part.allowed.map(entry => entry.id))
+        const named = (id: string) => current.get(id) ? { name: current.get(id)! } : {}
+        return { ...part, allowed: [...part.allowed.filter(entry => current.has(entry.id)).map(entry => ({ id: entry.id, ...named(entry.id) })),
+          ...[...current.keys()].filter(id => !known.has(id)).map(id => ({ id, ...named(id) }))] }
+      },
+    },
     rows(stored) {
       const config = DingtalkConfigSchema.parse(stored)
       const mentions = { zh: '仅 @', en: '@ only' }

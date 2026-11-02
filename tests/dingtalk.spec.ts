@@ -301,13 +301,18 @@ describe('DingTalk Source settings', () => {
     expect(() => dingtalkKind.schema.parse({ chats: [{ chatId: 'oc_feishu' }] })).toThrow()
     expect(() => dingtalkKind.schema.parse({ chats: [{ chatId: 'cid-test==', listen: 'all' }] })).toThrow()
     expect(dingtalkKind.health).toEqual(['dingtalk'])
-    // The robot hears only what mentions it, so no row reaches an unaddressed message, and the roster cannot sync.
+    // The robot hears only what mentions it, so no row reaches an unaddressed message.
     const config = dingtalkKind.schema.parse({ chats: [{ chatId: 'cid-test==', name: 'Team chat' }], otherChats: 'mentions' })
     expect(dingtalkKind.policy!.rows!(config)).toEqual([
       { id: 'cid-test==', label: 'Team chat', note: { zh: '仅 @', en: '@ only' }, cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } },
       { id: 'other', label: { zh: '其他群', en: 'Other chats' }, note: { zh: '仅 @', en: '@ only' }, cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } },
       { id: 'direct', label: { zh: '私聊', en: 'Direct messages' }, note: { zh: '接收', en: 'Received' }, cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } }])
-    expect(dingtalkKind.policy).not.toHaveProperty('sync')
+    // The roster syncs from a department, the only list of people DingTalk lets an app read.
+    const policy = dingtalkKind.policy!
+    expect(policy.schema.parse({})).toEqual({ allowed: [], syncDepartment: '' })
+    expect(policy.sync!.ready(policy.schema.parse({}))).toBe(false)
+    expect(policy.sync!.ready(policy.schema.parse({ syncDepartment: '1' }))).toBe(true)
+    for (const department of ['0', '01', 'abc', '-1', '1 2']) expect(() => policy.schema.parse({ syncDepartment: department }), department).toThrow()
     expect(dingtalkKind).not.toHaveProperty('threadContext')
     // The Trigger answering a quote is the one named after the quoted message.
     expect(dingtalkKind.repliesTo!(dingtalkTrigger(replying(quoted()), roots())!)).toBe(dingtalkTriggerId('msg-0'))
@@ -358,6 +363,14 @@ describe('dingtalk-bot through Commands', () => {
     expect(readFileSync(join(dir, 'args'), 'utf8').split('\n')).toEqual(['message', 'send', '--conversation', 'cid-test==', '--text-stdin', ''])
     // A call with no text leaves the CLI's stdin alone, as every other call does.
     expect(await commands(program(`echo '{"clientId":"ding123"}'`)).dingtalk(['auth', 'status'])).toEqual({ clientId: 'ding123' })
+  })
+
+  it('hands a variable to the CLI for that call alone', async () => {
+    const cli = program(`cat > /dev/null; printf '%s' "$DINGTALK_BOT_WEBHOOK" > '${dir}/env'; echo '{"ok":true}'`)
+    await commands(cli).dingtalk(['message', 'send', '--webhook-env', '--text-stdin'], 'x', { DINGTALK_BOT_WEBHOOK: HOOK })
+    expect(readFileSync(join(dir, 'env'), 'utf8')).toBe(HOOK)
+    await commands(cli).dingtalk(['message', 'send', '--text-stdin'], 'x')
+    expect(readFileSync(join(dir, 'env'), 'utf8')).toBe(process.env.DINGTALK_BOT_WEBHOOK ?? '')
   })
 
   it('fails with the status the CLI reports, and never with the arguments it was given', async () => {
@@ -424,6 +437,26 @@ esac
       receive: (trigger: Trigger) => engine.receive(trigger), ...deploymentOverrides }
     return { ctx: sourceContextOf(deps, dingtalkKind), deps, sources, health: board.all, store, turnOff: () => store.saveSettings(enabled(false)) }
   }
+  it('syncs the allowed list from a department: people who left are removed, names follow the contacts, new people are appended', async () => {
+    const path = join(dir, 'dingtalk-bot')
+    const members = (users: unknown) => writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' "$@" > '${dir}/args'\necho '${JSON.stringify({ users })}'\n`, { mode: 0o755 })
+    members([{ id: 'staff-3', name: 'Carol' }, { id: 'staff-1', name: 'Alice Li' }, { id: 'bad$id', name: 'Odd' }])
+    const { deps, store } = consumerSource(path)
+    const host = { sources: deps.sources, context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(deps, kind) } as never
+    const sync = dingtalkKind.policy!.sync!
+    const part = { allowed: [{ id: 'staff-1', name: 'Alice' }, { id: 'staff-2', name: 'Bob' }], syncDepartment: '42' }
+    // Those who stay keep their place, and an ID the Policy could not hold is left out rather than failing the sync.
+    expect(await sync.run(host, part, new AbortController().signal))
+      .toEqual({ allowed: [{ id: 'staff-1', name: 'Alice Li' }, { id: 'staff-3', name: 'Carol' }], syncDepartment: '42' })
+    expect(readFileSync(join(dir, 'args'), 'utf8').trim().split('\n')).toEqual(['contact', 'members', '--department', '42'])
+    // A member with no name stays unnamed; an answer of another shape fails the sync and leaves the list as it was.
+    members([{ id: 'staff-1', name: '' }])
+    expect(await sync.run(host, part, new AbortController().signal)).toEqual({ allowed: [{ id: 'staff-1' }], syncDepartment: '42' })
+    members({ not: 'a list' })
+    await expect(sync.run(host, part, new AbortController().signal)).rejects.toThrow()
+    store.close()
+  })
+
   /** A message line as `event consume` prints it. */
   const line = (overrides: Record<string, unknown> = {}) => JSON.stringify({ ...event(), ...overrides })
 
@@ -539,7 +572,8 @@ esac
       facts: { cli: { zh: '当前机器人 ding-robot', en: 'Current bot ding-robot' } } })
     expect(card.fields.map(field => field.key)).toEqual(['cli', 'chats', 'otherChats', 'directMessages'])
     expect(card.fields.find(field => field.key === 'chats')).toMatchObject({ type: 'rows', columns: [{ key: 'chatId', choose: expect.any(Object) }, { key: 'name', optional: true }] })
-    expect(card.policy?.fields.map(field => field.key)).toEqual(['allowed'])
+    expect(card.policy?.fields.map(field => field.key)).toEqual(['allowed', 'syncDepartment'])
+    expect(card.policy?.sync).toMatchObject({ label: { zh: '立即同步', en: 'Sync now' }, ready: false })
     store.close()
   })
 
