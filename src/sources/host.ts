@@ -11,6 +11,7 @@ import { fill } from '../infra/text.ts'
 export const HEALTH_TEXT = {
   setupPending: 'Waiting for the deployment check',
   sourceOff: 'Off',
+  sourceUnset: 'The Source names no account',
   feishuCliUnset: 'The Source is on, and its bot lark-cli is not set',
   feishuBotMissing: 'Waiting for the Feishu bot',
   pollFailures: '{count} consecutive failed polls; last: {error}',
@@ -32,7 +33,7 @@ export interface SourceContext {
   readonly deployment: Deployment
   readonly commands: Commands
   readonly ready: Promise<void>
-  /** True once setup resolved the repository and accounts; Sources poll only then. */
+  /** True once setup resolved the accounts of the Sources that are set; Sources poll only then. */
   configured(): boolean
   /** Setup problem keeping this Source's account from running; only the Feishu bot check reports one. */
   readonly problem?: SetupProblem | undefined

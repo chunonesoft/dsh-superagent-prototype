@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
-import { gitEnv } from './fixtures/git.ts'
+import type { Context } from '@deepseek-ai/cordis'
+import { Setup } from '../src/app/setup.ts'
+import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, sourcesSet, type Machine, type Probe } from '../src/deployment.ts'
+import { workerGitConfig } from '../src/infra/environment.ts'
+import { SettingsSchema } from '../src/policy.ts'
+import { gitEnv, subprocess } from './fixtures/git.ts'
 
 const exec = promisify(execFile)
 let dir: string
@@ -97,5 +101,79 @@ describe('setup', () => {
     await refuses('feishuNoBot')
     program(join(dir, 'bin', 'lark-cli'), 'echo "not configured" >&2; exit 1')
     await refuses('feishuCliFailed', { output: expect.stringContaining('not configured') })
+  })
+})
+
+/** Settings whose Sources hold `config`, by Source ID. */
+const settingsOf = (config: Record<string, Record<string, unknown>>, enabled = true) =>
+  SettingsSchema.parse({ sources: Object.fromEntries(Object.entries(config).map(([id, value]) => [id, { enabled, config: value }])) })
+
+describe('sources set', () => {
+  it('names the Sources with a setup field set, whether or not they are enabled', () => {
+    const set = (config: Record<string, Record<string, unknown>>, enabled?: boolean) => sourcesSet(settingsOf(config, enabled))
+    const none = { github: false, gitlab: false, feishu: false, dingtalk: false }
+    expect(set({})).toEqual(none)
+    // Either account field sets a Source, and a blank one does not. A setting that is no account field sets nothing, nor does a Source with no setup field.
+    expect(set({ github: { repository: 'acme/widgets' } })).toEqual({ ...none, github: true })
+    expect(set({ github: { cli: 'gh' } })).toEqual({ ...none, github: true })
+    expect(set({ feishu: { cli: 'lark-cli' } }, false)).toEqual({ ...none, feishu: true })
+    expect(set({ github: { repository: ' ', cli: '', pollSeconds: 120 }, feishu: { cli: '  ' }, webhook: { cli: 'hook' } })).toEqual(none)
+  })
+})
+
+describe('Setup', () => {
+  const github = () => ({ repository: 'acme/widgets', cli: join(dir, 'bin', 'gh') })
+  const feishu = () => ({ cli: join(dir, 'bin', 'lark-cli') })
+  const started: Setup[] = []
+  afterEach(() => { for (const setup of started.splice(0)) setup.restore() })
+  /** Runs setup as the Runtime does at startup, over the Sources' configuration `config`: the stand-in CLIs above and the real git, with the agent environment applied to this process until `restore`. */
+  async function start(config: Record<string, Record<string, unknown>>, value = machine({ stateDir: join(dir, 'agent') })) {
+    mkdirSync(value.stateDir, { recursive: true })
+    const context = { subprocess: subprocess(workerGitConfig(value.stateDir)), logger: { warn: () => {} } } as unknown as Context
+    const setup = new Setup({ context, machine: value, lifetime: new AbortController().signal, restart: () => {} })
+    started.push(setup)
+    return { setup, resolved: await setup.run(settingsOf(config)) }
+  }
+  it('resolves with no code host when a chat Source is set', async () => {
+    const { setup, resolved } = await start({ feishu: feishu() })
+    expect(resolved).toBe(true)
+    expect(setup.problem).toBeUndefined()
+    expect(setup.deployment.github).toBeUndefined()
+    expect(setup.deployment.repository).toBeUndefined()
+    expect(setup.deployment.feishu).toMatchObject({ botId: 'ou_bot', name: 'Widgets Bot' })
+  })
+  it('still reports repositoryUnset when no Source is set', async () => {
+    // A Source with no setup field set, or with an empty CLI, is no Source.
+    const configs: Record<string, Record<string, unknown>>[] = [{}, { github: {}, feishu: { cli: '' } }]
+    for (const config of configs) {
+      const { setup, resolved } = await start(config)
+      expect(resolved).toBe(false)
+      expect(setup.configured()).toBe(false)
+      expect(setup.problem).toMatchObject({ place: 'github', code: 'repositoryUnset' })
+    }
+  })
+  it('resolves a GitHub-only deployment to the same object', async () => {
+    const value = machine({ stateDir: join(dir, 'agent') })
+    const { setup, resolved } = await start({ github: github() }, value)
+    expect(resolved).toBe(true)
+    expect(setup.deployment).toStrictEqual(await resolveDeployment(value, github(), probe, path))
+  })
+  it('makes a chat Source that fails the setup problem when it is the only Source', async () => {
+    program(join(dir, 'bin', 'lark-cli'), lark({ appId: 'cli_bot', identities: { bot: { status: 'ready' } } }, 'off'))
+    const alone = await start({ feishu: feishu() })
+    expect(alone.resolved).toBe(false)
+    expect(alone.setup.problem).toMatchObject({ place: 'feishu', code: 'feishuUserIdentity', values: { mode: 'off' } })
+    expect(alone.setup.feishuProblem).toBeUndefined()
+    // With a code host to run, the same failure leaves only Feishu out.
+    const hosted = await start({ feishu: feishu(), github: github() })
+    expect(hosted.resolved).toBe(true)
+    expect(hosted.setup.feishuProblem).toMatchObject({ place: 'feishu', code: 'feishuUserIdentity' })
+    expect(hosted.setup.deployment.feishu).toBeUndefined()
+  })
+  it('accepts a GitHub Source whose account fields are all cleared, and still names what a half-filled one lacks', async () => {
+    const { setup } = await start({})
+    // Clearing the fields leaves no GitHub account to check, so the save may go through and setup run again.
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: '', cli: '' }, feishu: feishu() }))).resolves.toBeUndefined()
+    await expect(setup.checkAccounts('source:github', settingsOf({ github: { repository: 'acme/widgets' } }))).rejects.toMatchObject({ code: 'agentCliUnset' })
   })
 })

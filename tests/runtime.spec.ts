@@ -1000,6 +1000,27 @@ it('waits for setup when the shim directory holds a file dsh-superagent did not 
   await next.stop()
 })
 
+it('runs a deployment that only Feishu runs: its workers get their environment and tools without a GitHub account, and no PR to report', async () => {
+  // With no GitHub account, setup checks only that git reads the agent configuration's empty credential helper.
+  answers['git config -z --show-origin --get-all credential.helper'] = `file:${workerGitConfig(directory)}\0\0`
+  const next = await restart({}, { github: { repository: '', cli: '' } })
+  await next.ready
+  next.sources.register(feishuKind); next.sources.register(githubKind)
+  expect(next.setupProblem).toBeUndefined()
+  expect(next.configured()).toBe(true)
+  expect(next.deployment.github).toBeUndefined()
+  expect(readFileSync(workerGitConfig(directory), 'utf8')).not.toContain('github.com')
+  expect(readFileSync(join(directory, 'worker-bin', 'gh'), 'utf8')).toContain('this installation has no GitHub account')
+  const { ticket, sessionId } = await acceptedTicket()
+  // The GitHub Source's variables stay empty, and the report tool tells the worker to leave out the PR.
+  expect(Object.fromEntries(next.ticketEnvironment(ticket).map(variable => [variable.key, variable.value])))
+    .toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: '', DSH_SUPERAGENT_GITHUB_ACCOUNT: '', DSH_SUPERAGENT_GITHUB_NUMBER: '' })
+  const report = tools.get(sessionId)!.get('orchestrator_report') as unknown as { parameters: { properties: { pr_number: { description: string } } } }
+  expect(report.parameters.properties.pr_number.description).toBe('Omit it: this installation has no GitHub account.')
+  await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 })).rejects.toThrow('no GitHub account')
+  expect(await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'started' })).toMatchObject({ reported: true })
+})
+
 it('rewrites the blocked-command shims when the Executor settings change them, without a restart', async () => {
   const bin = join(directory, 'worker-bin')
   const save = (blockedCommands: string[]) => runtime.settings.save('executor', { ...runtime.store.settings().executor, blockedCommands }, runtime.store.blockRevision('executor'), 'panel')

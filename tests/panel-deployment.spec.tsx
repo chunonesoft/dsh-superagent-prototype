@@ -92,6 +92,18 @@ it('renders the Deployment page with the derived accounts in the Plugin Manager,
   expect(text()).toContain(zh.hostNotRunning)
 })
 
+it('shows a dash for the repository and the agent account of a deployment that only chat Sources run', async () => {
+  const container = document.createElement('div'); document.body.append(container)
+  const root = createRoot(container)
+  onTestFinished(() => { act(() => { root.unmount() }); container.remove() })
+  const { form } = fakeForm()
+  server.setup = { ...server.setup, accounts: { feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot', name: 'Widgets Bot' } } }
+  await act(async () => { root.render(<PluginConfig t={translator(zh)} view="page" form={{ state: form.getSnapshot(), mutate: form.mutate }} />) })
+  await settle()
+  expect(all('.dt-kv > div').map(row => [...row.children].map(cell => cell.textContent)))
+    .toEqual([[zh.deploymentRepository, '—'], [zh.deploymentAgent, '—'], [zh.deploymentFeishu, 'Widgets Bot']])
+})
+
 it('tells a dsh-superagent that is starting from a browser that cannot write on the Deployment page', async () => {
   const { form: shared, publish } = fakeForm()
   server.form = shared

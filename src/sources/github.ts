@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { key, type Thread } from '../core/index.ts'
 import { sameName } from '../infra/text.ts'
-import { GithubAccountsSchema } from '../deployment.ts'
+import { GithubAccountsSchema, githubOf } from '../deployment.ts'
 import { CliError, validItems, type Tally } from '../infra/commands.ts'
 import { ciCounts, ciFact, ciFailures, ciSummary, githubThreadContext, pullChecks } from './github-read.ts'
 import { branchCiTrigger, ciTrigger, commentTrigger, CommentSchema, githubAddress, issueTrigger, IssueSchema, pullTrigger, SOURCE }
@@ -97,13 +97,16 @@ export const githubKind: SourceKind<GithubConfig> = {
       { key: 'DSH_SUPERAGENT_GITHUB_NUMBER', description: { zh: '接下工单的 Issue 或 PR 编号；工单不是从 GitHub 来的时为空', en: 'Number of the Issue or PR that started the ticket; empty when the ticket did not start on GitHub' } },
       { key: 'DSH_SUPERAGENT_GITHUB_PR_HEAD', description: { zh: '接下工单的 PR 的 head 引用 refs/pull/<编号>/head；不是 PR 时为空', en: 'Head ref refs/pull/<number>/head of the PR that started the ticket; empty when it was not a PR' } },
     ],
-    values: ({ deployment, trigger }) => {
+    values: ({ deployment, trigger }): Record<string, string> => {
+      const { github, repository = '' } = deployment
+      // Without a GitHub account every variable stays empty.
+      if (!github) return {}
       const number = trigger?.threads[0]?.source === SOURCE ? Number(trigger.meta.number) || 0 : 0
-      return { DSH_SUPERAGENT_GITHUB_REPOSITORY: deployment.repository, DSH_SUPERAGENT_GITHUB_ACCOUNT: deployment.github.login, DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: deployment.github.noreply, DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
+      return { DSH_SUPERAGENT_GITHUB_REPOSITORY: repository, DSH_SUPERAGENT_GITHUB_ACCOUNT: github.login, DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: github.noreply, DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
         DSH_SUPERAGENT_GITHUB_PR_HEAD: number && trigger?.meta.isPr === true ? `refs/pull/${number}/head` : '' }
     },
   },
-  facts: (deployment): Record<string, Localized | string> => deployment ? {
+  facts: (deployment): Record<string, Localized | string> => deployment?.github ? {
     cli: { zh: `当前账号 @${deployment.github.login}`, en: `Current account @${deployment.github.login}` },
   } : {},
 }
@@ -130,6 +133,8 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
   // Setup restarts dsh-superagent once it resolves the accounts; until then nothing is polled.
   if (!ctx.configured()) { ctx.report('github', health('paused', 'setupPending')); return }
+  // A deployment that only chat Sources run has no GitHub account to poll as.
+  if (!ctx.deployment.github) { ctx.report('github', health('paused', 'sourceUnset')); return }
   while (!signal.aborted) {
     const config = ctx.config<GithubConfig>(SOURCE)
     try {
@@ -218,7 +223,7 @@ async function readStream(ctx: SourceContext, round: Round, id: string, path: st
   }
   const { headers, body } = included(raw)
   const items = validItems(ListedSchema, z.array(z.unknown()).parse(JSON.parse(body)), round.tally)
-  const { login } = ctx.deployment.github
+  const { login } = githubOf(ctx.deployment)
   const fresh = (at: string | null | undefined, kind: string) =>
     kind in started && Date.parse(at ?? '') >= Math.max(Date.parse(started[kind]!), horizon)
   for (const item of items) {
@@ -264,7 +269,7 @@ async function pollBranchCi(ctx: SourceContext, round: Round): Promise<void> {
   if (known && JSON.stringify(now) !== JSON.stringify(known)) {
     revision += 1
     const summary = ciSummary(snapshot, branch, `github/commits/${head.sha}/checks`)
-    const url = `https://github.com/${ctx.deployment.repository}/commit/${head.sha}`
+    const url = `https://github.com/${commands.repository}/commit/${head.sha}`
     await ctx.receive(branchCiTrigger(branch, head.sha, revision, summary, url))
     ctx.threads.describe(`github:ci:${branch}`, { label: `CI on ${branch}`, facts: { ci: ciFact(counts) } })
   }
@@ -300,7 +305,7 @@ async function pollNotifications(ctx: SourceContext, round: Round): Promise<{ co
   const commands = ctx.commands.withSignal(round.signal)
   const since = state.get(KV.github.since) ?? round.started
   if (state.get(KV.github.since) === undefined) state.set(KV.github.since, since)
-  const { repository } = ctx.deployment
+  const { repository } = commands
   const path = `notifications?all=true&per_page=50&since=${encodeURIComponent(since)}`
   const raw = await commands.api(path, '--include')
   const split = raw.search(/\r?\n\r?\n/)
@@ -351,7 +356,7 @@ async function readNotified(ctx: SourceContext, round: Round, number: number, it
     if (!isPr) {
       // An Issue opened by someone other than the agent since the cursor brings its body so a mention in it reaches the gate.
       // A mention added by a later edit to the body is not read: only the author can be the actor of the body.
-      const { login } = ctx.deployment.github
+      const { login } = githubOf(ctx.deployment)
       const opened = Date.parse(issue.created_at) >= Date.parse(since) && !sameName(issue.user.login, login)
       if (opened) await ctx.receive(issueTrigger(issue, login))
       await intakeComments(ctx, { number, isPr: false, url: issue.html_url }, since, round)
@@ -361,7 +366,7 @@ async function readNotified(ctx: SourceContext, round: Round, number: number, it
   if (isPr) {
     const pr = await pull(ctx, round, number)
     // Emit a PR description trigger for PRs opened since the cursor; its ID is the same as the one produced by the repository PR stream.
-    const { login } = ctx.deployment.github
+    const { login } = githubOf(ctx.deployment)
     if (pr.created_at && Date.parse(pr.created_at) >= Date.parse(since) && !sameName(pr.user.login, login)) {
       const opened = { number, title: pr.title ?? '', body: pr.body, user: pr.user, created_at: pr.created_at, html_url: pr.html_url }
       await ctx.receive(pullTrigger(opened, login))
@@ -383,7 +388,7 @@ function pull(ctx: SourceContext, round: Round, number: number): Promise<Pull> {
 }
 async function intakeComments(ctx: SourceContext, ref: PullRef, since: string, round: Round): Promise<void> {
   const commands = ctx.commands.withSignal(round.signal)
-  const { login } = ctx.deployment.github
+  const { login } = githubOf(ctx.deployment)
   const kinds = ref.isPr ? ['conversation', 'inline', 'review'] as const : ['conversation'] as const
   for (const kind of kinds) {
     const suffix = `&since=${encodeURIComponent(since)}`

@@ -6,6 +6,7 @@ import { SettingsConflict } from '../src/app/settings.ts'
 import type { HttpHost } from '../src/app/http.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { SetupError } from '../src/setup.ts'
+import { testChatDeployment, testDeployment, testMachine } from './fixtures/deployment.ts'
 
 type Handler = (req: unknown, res: unknown) => Promise<void>
 type Headers = Record<string, string | undefined>
@@ -95,4 +96,16 @@ it('answers a prompt save that lost a race with 409, and a settings body over 12
   expect(await call('PUT', 'settings/executor', { value, revision: 0 })).toEqual({ status: 400,
     body: { error: `Request exceeds ${128 * 1024} bytes` } })
   expect(saves).toEqual([])
+})
+
+it('lists the accounts of a GitHub deployment as before, and a repository and agent only when there is a code host', async () => {
+  const accounts = async (deployment: object) => {
+    const call = serve({ store: { settings: () => SettingsSchema.parse({}), tickets: { open: () => [] } }, executor: { activeCount: () => 0 },
+      machine: testMachine(), masterId: 'master', health: {}, configured: () => true, deployment })
+    return ((await call('GET', 'state')).body.setup as { accounts: unknown }).accounts
+  }
+  const feishu = { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot', name: 'Widgets Bot' }
+  expect(await accounts(testDeployment())).toStrictEqual({ repository: 'acme/widgets', agent: 'agent-bot', feishu })
+  expect(await accounts(testChatDeployment())).toStrictEqual({ feishu })
+  expect(await accounts(testChatDeployment({ feishu: undefined }))).toStrictEqual({ feishu: null })
 })

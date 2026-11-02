@@ -7,6 +7,7 @@ import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
+import type { Settings } from './policy.ts'
 import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -50,12 +51,34 @@ export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
 /** Source configuration keys that affect deployment setup and trigger a restart when changed. */
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
 
+/** The agent's GitHub account: the CLI it acts through, its login, and its commit email. */
+export interface GithubAccount { cli: string; login: string; noreply: string }
+/**
+ * What setup resolved: the machine settings and the accounts of the Sources that are set. `github` is the agent's GitHub account and
+ * comes with its `repository`; a deployment that only chat Sources run has neither.
+ */
 export interface Deployment extends Machine {
-  repository: string
-  github: { cli: string; login: string; noreply: string }
+  repository?: string
+  github?: GithubAccount
   feishu?: FeishuBot
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
+
+/** The agent's GitHub account, for code that acts only on a GitHub deployment. @throws when the deployment has none. */
+export function githubOf(deployment: Pick<Deployment, 'github'>): GithubAccount {
+  if (!deployment.github) throw new Error('This installation has no GitHub account; set the repository and the agent CLI on the GitHub Source')
+  return deployment.github
+}
+
+export interface SourcesSet { github: boolean; gitlab: boolean; feishu: boolean; dingtalk: boolean }
+/** Which Sources hold a value in one of their `SETUP_FIELDS`, enabled or not, as setup reads them; a kind without an entry there sets nothing. */
+export function sourcesSet(settings: Pick<Settings, 'sources'>): SourcesSet {
+  const set = (id: string): boolean => (SETUP_FIELDS[id] ?? []).some(key => {
+    const value = settings.sources[id]?.config[key]
+    return typeof value === 'string' && value.trim() !== ''
+  })
+  return { github: set('github'), gitlab: set('gitlab'), feishu: set('feishu'), dingtalk: set('dingtalk') }
+}
 
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
 export function executable(name: string, path: string, exclude?: string): string {

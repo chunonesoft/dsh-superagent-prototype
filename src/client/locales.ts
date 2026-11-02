@@ -743,6 +743,7 @@ const TEXT = {
   'setup.feishuNoBot': ['飞书机器人接口没有返回机器人的 open_id。', SETUP_PROBLEMS.feishuNoBot[1]],
   'healthCode.setupPending': ['等待部署检查', HEALTH_TEXT.setupPending],
   'healthCode.sourceOff': ['已关闭', HEALTH_TEXT.sourceOff],
+  'healthCode.sourceUnset': ['来源没有设置账号', HEALTH_TEXT.sourceUnset],
   'healthCode.feishuCliUnset': ['来源已打开，还没有设置机器人的 lark-cli', HEALTH_TEXT.feishuCliUnset],
   'healthCode.feishuBotMissing': ['等待飞书机器人', HEALTH_TEXT.feishuBotMissing],
   'healthCode.pollFailures': ['连续 {count} 次轮询失败，最近一次：{error}', HEALTH_TEXT.pollFailures],

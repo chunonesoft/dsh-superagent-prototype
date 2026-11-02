@@ -1,7 +1,7 @@
 /** Probes repository and account CLIs, configures the worker execution environment and command shims, and tracks setup readiness. */
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError } from '../core/index.ts'
-import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, workerProbe, type Deployment, type Machine } from '../deployment.ts'
+import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, sourcesSet, workerProbe, type Deployment, type Machine } from '../deployment.ts'
 import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
@@ -18,7 +18,7 @@ const setupFields = (settings: Settings) =>
 export const setupChanged = (before: Settings, after: Settings): boolean => setupFields(before) !== setupFields(after)
 
 /**
- * Resolves the target repository, GitHub account, and optional Feishu bot by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
+ * Resolves the target repository and GitHub account when the GitHub Source is set, and the optional Feishu bot, by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
  * `Runtime` runs it at startup to gate orchestration readiness, while `Settings` uses it to validate account changes, update blocked command shims, and schedule restarts.
  */
 export class Setup {
@@ -60,8 +60,9 @@ export class Setup {
   /** Verify account CLIs for a modified source block before saving, ignoring setup errors belonging to other blocks. */
   async checkAccounts(block: SettingsBlock, settings: Settings): Promise<void> {
     const { machine } = this.host
+    // A Source with all its account fields cleared names no account to check; setup runs again on the restart the save causes.
     const check = block === 'source:feishu' ? resolveFeishuBot(machine, settings.sources.feishu?.config, this.probe())
-      : resolveDeployment(machine, settings.sources.github?.config, this.probe())
+      : sourcesSet(settings).github ? resolveDeployment(machine, settings.sources.github?.config, this.probe()) : Promise.resolve()
     await check.catch((error: unknown) => { if (!(error instanceof SetupError) || error.place === block.slice(7)) throw error })
   }
   async blockCommands(blocked: readonly string[]): Promise<void> {
@@ -76,9 +77,14 @@ export class Setup {
   private async resolve(settings: Settings): Promise<Deployment> {
     const { context, machine, lifetime } = this.host
     const probe = this.probe()
-    const deployment = await resolveDeployment(machine, settings.sources.github?.config, probe)
+    // A GitHub field set, or no Source set at all, goes through the GitHub check, which names what is missing; otherwise no code host runs.
+    const set = sourcesSet(settings)
+    const deployment: Deployment = set.github || !Object.values(set).some(Boolean)
+      ? await resolveDeployment(machine, settings.sources.github?.config, probe) : machine
     const feishu = await resolveFeishuBot(machine, settings.sources.feishu?.config, probe).catch((error: unknown) => {
       if (!(error instanceof SetupError)) throw error
+      // Without a code host the chat Source is all there is to run, so its failure stops setup.
+      if (!deployment.github) throw error
       this.feishuProblem = error.problem
       context.logger.warn('dsh-superagent leaves Feishu out: %s', error.message)
       return undefined

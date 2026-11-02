@@ -1,15 +1,15 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
+import { SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'
+import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, verifyEnvironment, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
-import { testDeployment } from './fixtures/deployment.ts'
-import { gitEnv } from './fixtures/git.ts'
+import { testChatDeployment, testDeployment } from './fixtures/deployment.ts'
+import { gitEnv, subprocess } from './fixtures/git.ts'
 
 // Git and shell subprocesses can exceed the 5s default timeout when the test suite runs in parallel.
 vi.setConfig({ testTimeout: 30_000 })
@@ -37,6 +37,13 @@ describe('worker shims', () => {
     const bin = workerBin(dir)
     await expect(exec(join(bin, 'lark-cli'), ['im', '+chat-list'])).rejects.toMatchObject({ code: 1, stderr: 'lark-cli is unavailable: this installation has no Feishu bot.\n' })
     await expect(exec(join(bin, 'personal-gh'), [])).rejects.toMatchObject({ code: 1, stderr: 'personal-gh is blocked in this installation; use gh, which acts as agent-bot.\n' })
+  })
+  it('writes a gh shim that fails without a GitHub account', async () => {
+    await writeEnvironment(testChatDeployment({ stateDir: dir, feishu: undefined }), ['personal-gh'])
+    const bin = workerBin(dir)
+    await expect(exec(join(bin, 'gh'), ['api', 'user'])).rejects.toMatchObject({ code: 1, stderr: 'gh is unavailable: this installation has no GitHub account.\n' })
+    // A blocked command cannot point to the agent's gh, which does not exist.
+    await expect(exec(join(bin, 'personal-gh'), [])).rejects.toMatchObject({ code: 1, stderr: 'personal-gh is blocked in this installation.\n' })
   })
   it('keep `gh` and `lark-cli` working, and shim no `git`, when the blocked commands name the commands workers need', async () => {
     const gh = program(join(dir, 'gh-agent'), 'echo gh "$@"'), lark = program(join(dir, 'lark-bot'), 'echo lark "$@"')
@@ -96,6 +103,33 @@ describe('agent git configuration', () => {
   })
 })
 
+describe('agent git configuration without a code host', () => {
+  it('keeps the git isolation with no code host', async () => {
+    const home = join(dir, 'home'); mkdirSync(home)
+    writeFileSync(join(home, '.gitconfig'), '[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n[credential]\n\thelper = osxkeychain\n')
+    await writeEnvironment(testChatDeployment({ stateDir: dir }), [])
+    // With no GitHub account the file holds no GitHub section: no helper, and no rewrite of GitHub addresses.
+    expect(readFileSync(workerGitConfig(dir), 'utf8')).not.toContain('github.com')
+    const env = workerEnv({ PATH: process.env.PATH, HOME: home, ...agentVariables(dir) })
+    const git = async (...args: string[]): Promise<string> => (await exec('git', args, { cwd: dir, env })).stdout.trim()
+    await git('init', '-q', 'repo')
+    await exec('git', ['-C', 'repo', 'remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], { cwd: dir, env })
+    // The operator's helper and rewrite stay out, as with an account.
+    expect(await git('config', '--get-all', 'credential.helper')).toBe('')
+    expect(await git('-C', 'repo', 'remote', 'get-url', '--push', 'origin')).toBe('git@github.com:acme/widgets.git')
+  })
+  it('checks that git reads the agent\'s configuration, with and without a GitHub account', async () => {
+    writeFileSync(join(dir, 'operator'), '[credential]\n\thelper = osxkeychain\n[credential "https://github.com"]\n\thelper = osxkeychain\n')
+    const signal = new AbortController().signal
+    for (const deployment of [testDeployment({ stateDir: dir }), testChatDeployment({ stateDir: dir })]) {
+      await writeEnvironment(deployment, [])
+      await expect(verifyEnvironment(deployment, subprocess(workerGitConfig(dir)), signal)).resolves.toBeUndefined()
+      // git older than 2.32 ignores GIT_CONFIG_GLOBAL and reads the operator's file instead.
+      await expect(verifyEnvironment(deployment, subprocess(join(dir, 'operator')), signal)).rejects.toMatchObject({ code: 'gitTooOld' })
+    }
+  })
+})
+
 it('fails instead of asking the operator\'s askpass helpers when the agent\'s credential helper has no answer', async () => {
   const log = join(dir, 'asked')
   const askpass = program(join(dir, 'askpass'), `echo asked >> ${log}; echo operator-secret`)
@@ -118,18 +152,6 @@ it('removes every spelling of a directory from PATH and keeps the other entries'
   expect(withoutDirectory([`${bin}/`, join(dir, 'link', 'worker-bin'), '/usr/bin', 'node_modules/.bin'].join(':'), bin)).toBe('/usr/bin:node_modules/.bin')
 })
 
-/** Minimal SubprocessRuntime backed by child_process.spawn with an isolated global git config. */
-const subprocess = (config: string): SubprocessRuntime => ({
-  spawn: ({ argv, cwd }: { argv: readonly string[]; cwd: string }) => {
-    const child = spawn(argv[0]!, argv.slice(1), { cwd, env: gitEnv({ GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1' }) })
-    const output = { stdout: '', stderr: '' }
-    child.stdout.on('data', chunk => { output.stdout += String(chunk) })
-    child.stderr.on('data', chunk => { output.stderr += String(chunk) })
-    const reader = (name: 'stdout' | 'stderr') => ({ readFrom: () => ({ text: output[name], nextOffset: 0, lossy: false }) })
-    const done = new Promise(resolve => child.on('close', code => resolve({ exitCode: code, signal: null })))
-    return { done, collected: { stdout: reader('stdout'), stderr: reader('stderr') } }
-  },
-}) as unknown as SubprocessRuntime
 describe('ticket directory check', () => {
   const signal = new AbortController().signal
   const env = () => gitEnv({ GIT_CONFIG_GLOBAL: join(dir, 'global'), GIT_CONFIG_NOSYSTEM: '1' })

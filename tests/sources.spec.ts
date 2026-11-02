@@ -15,7 +15,7 @@ import { cursorAt, POLL_HORIZON_MS } from '../src/sources/poll.ts'
 import { Store } from '../src/app/store.ts'
 import { Commands, commandError } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
-import { testDeployment } from './fixtures/deployment.ts'
+import { testChatDeployment, testDeployment } from './fixtures/deployment.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
 import { SetupError, type SetupProblem } from '../src/setup.ts'
@@ -801,6 +801,29 @@ describe('github source', () => {
       await flaky.stop()
       run.mockRestore()
     } finally { vi.useRealTimers() }
+  })
+  it('pauses the GitHub Source with no account', async () => {
+    // Setup is complete, but a chat Source alone runs the deployment, so there is no GitHub account to poll as.
+    const chat = testChatDeployment()
+    const value = host({ sources: emptyRegistry(), deployment: chat, commands: new Commands(() => chat, {}, new AbortController().signal) })
+    const run = vi.spyOn(value.commands, 'run')
+    const disposers: (() => unknown)[] = []
+    applyGithub({ orchestrator: value, effect: (effect: () => () => unknown) => { disposers.push(effect()) } } as never)
+    await vi.waitFor(() => expect(value.health.github).toEqual({ state: 'paused', detail: 'The Source names no account', code: 'sourceUnset' }))
+    expect(run).not.toHaveBeenCalled()
+    for (const dispose of disposers) await dispose()
+    value.store.close()
+  })
+  it('gives the GitHub Source no environment values and no facts without a GitHub account', () => {
+    const chat = testChatDeployment(), github = testDeployment()
+    const { environment, facts } = githubKind
+    expect(environment!.values({ deployment: chat, config: githubKind.schema.parse({}) })).toEqual({})
+    expect(facts!(chat)).toEqual({})
+    expect(facts!(undefined)).toEqual({})
+    // With an account they are as they were.
+    expect(environment!.values({ deployment: github, config: githubKind.schema.parse({}) })).toMatchObject({
+      DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets', DSH_SUPERAGENT_GITHUB_ACCOUNT: 'agent-bot', DSH_SUPERAGENT_GITHUB_NUMBER: '' })
+    expect(facts!(github)).toEqual({ cli: { zh: '当前账号 @agent-bot', en: 'Current account @agent-bot' } })
   })
   it('reports a failure that escapes the polling loop as its health instead of an unhandled rejection', async () => {
     // The fixture's registry already holds the kind; this one starts empty so the plugin can register it.

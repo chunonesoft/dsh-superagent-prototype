@@ -8,7 +8,7 @@ import { githubChannel } from '../src/sources/github-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { key, type OutboundMessage } from '../src/core/index.ts'
-import { testDeployment } from './fixtures/deployment.ts'
+import { testChatDeployment, testDeployment } from './fixtures/deployment.ts'
 const sources = new SourceRegistry(() => SettingsSchema.parse({}))
 sources.register(feishuKind); sources.register(githubKind)
 const send = (commands: Commands, message: OutboundMessage) => sources.send(message, commands)
@@ -31,6 +31,17 @@ describe('account-isolated operations', () => {
   })
   it('refuses Feishu commands when the deployment has no Feishu bot', async () => {
     await expect(new Commands(() => testDeployment({ feishu: undefined }), {}, new AbortController().signal).lark(['im', '+chat-list'])).rejects.toThrow('The Feishu Source has no working bot CLI')
+  })
+  it('refuses GitHub commands when the deployment has no GitHub account', async () => {
+    const commands = new Commands(() => testChatDeployment(), {}, new AbortController().signal)
+    const run = vi.spyOn(commands, 'run')
+    const refused = 'This installation has no GitHub account'
+    await expect(commands.gh(['api', 'user'])).rejects.toThrow(refused)
+    await expect(commands.api(z.unknown(), 'issues/1')).rejects.toThrow(refused)
+    await expect(commands.api('issues/1')).rejects.toThrow(refused)
+    await expect(commands.pages(z.unknown(), 'issues')).rejects.toThrow(refused)
+    expect(() => commands.repository).toThrow(refused)
+    expect(run).not.toHaveBeenCalled()
   })
   it('reconciles an uncertain GitHub send with its stable marker', async () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal)
